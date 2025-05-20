@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract VPOP is Ownable {
     uint256 public platformFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public creatorFeeRate; // Fee rate in basis points (1% = 100)
+    uint256 public apeFeeRate; // Fee rate in basis points (1% = 100)
 
     struct Market {
         address creator;
@@ -33,6 +34,8 @@ contract VPOP is Ownable {
         uint256 weight;
         uint256 timestamp;
         bool revealed;
+        uint256 position;
+        uint256 nonce;
     }
 
 
@@ -55,6 +58,7 @@ contract VPOP is Ownable {
         uint256 upperBound,
         uint8 percentile
     );
+    
     event CommitmentCreated(
         uint256 indexed marketId,
         address indexed user,
@@ -63,19 +67,31 @@ contract VPOP is Ownable {
         uint256 weight
     );
 
+    event CommitmentRevealed(
+        uint256 indexed marketId,
+        address indexed user,
+        bytes32 commitmentHash,
+        uint256 position,
+        uint256 wager,
+        uint256 nonce
+    );
+
+
     constructor() payable Ownable(msg.sender) {
-        _marketIdCounter = 1;
+        _marketIdCounter = 0;
         platformFeeRate = 800; // 8% in basis points (1000 = 10%)
         creatorFeeRate = 200; // 2% in basis points (1000 = 10%)
+        apeFeeRate = 200; // 2% in basis points (1000 = 10%)
     }
 
     /**
      * @dev Updates the fee rate. Only callable by the owner.
      * @param _newPlatformFeeRate The new fee rate in basis points (1% = 100)
      */
-    function updatePlatformSettings(uint256 _newPlatformFeeRate, uint256 _newCreatorFeeRate) external onlyOwner {
+    function updatePlatformSettings(uint256 _newPlatformFeeRate, uint256 _newCreatorFeeRate, uint256 _newApeFeeRate) external onlyOwner {
         platformFeeRate = _newPlatformFeeRate;
         creatorFeeRate = _newCreatorFeeRate;
+        apeFeeRate = _newApeFeeRate;
     }
 
     /**
@@ -114,8 +130,9 @@ contract VPOP is Ownable {
         require(bytes(_ipfsHash).length > 0, "IPFS hash cannot be empty");
 
         // Get the next market ID and increment the counter
+         _marketIdCounter++;
         marketId = _marketIdCounter;
-        _marketIdCounter++;
+       
 
         Market memory newMarket = Market({
             creator: msg.sender,
@@ -150,12 +167,11 @@ contract VPOP is Ownable {
     /**
      * @dev Submit a commitment for a market
      * @param marketId The ID of the market to commit to
-     * @param commitmentHash The hash of the commitment
+     * @param commitmentHash The hash of the commitment (position, nonce, wager)
      * @param wager The wager of the commitment
      */
     function commit(
         uint256 marketId,
-        // bytes[] memory commitment,
         bytes32 commitmentHash,
         uint256 wager
     ) public payable {
@@ -212,7 +228,7 @@ contract VPOP is Ownable {
         }
 
         // Calculate weight
-        uint256 weight = wager * market.decayFactor* ((block.timestamp - market.createdAt) / market.commitDuration);
+        uint256 weight = wager * market.decayFactor * ((block.timestamp - market.createdAt) / market.commitDuration);
         
         // Store the commitment
         commitments[marketId][commitmentHash] = Commitment({
@@ -220,7 +236,9 @@ contract VPOP is Ownable {
             wager: wager,
             weight: weight,
             timestamp: block.timestamp,
-            revealed: false
+            revealed: false,
+            position: 0, // Will be set during reveal
+            nonce: 0    // Will be set during reveal
         });
 
         emit CommitmentCreated(
@@ -230,9 +248,61 @@ contract VPOP is Ownable {
             wager,
             weight
         );
-        
     }
 
+    /**
+     * @dev Reveal a commitment by providing the original data
+     * @param marketId The ID of the market
+     * @param commitmentHash The hash of the commitment to reveal
+     * @param position The original position value
+     * @param wager The original wager amount
+     * @param nonce The original nonce
+     */
+    function reveal(
+        uint256 marketId,
+        bytes32 commitmentHash,
+        uint256 position,
+        uint256 wager,
+        uint256 nonce
+    ) external {
+        // Validate market exists
+        require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
+        
+        Market storage market = markets[marketId];
+        
+        // Validate reveal phase is active
+        require(
+            block.timestamp > market.createdAt + market.commitDuration &&
+            block.timestamp <= market.createdAt + market.commitDuration + market.revealDuration,
+            "Not in reveal phase"
+        );
+
+        // Get the commitment
+        Commitment storage commitment = commitments[marketId][commitmentHash];
+        
+        // Verify commitment exists and hasn't been revealed
+        require(commitment.commitmentHash == commitmentHash, "Commitment does not exist");
+        require(!commitment.revealed, "Commitment already revealed");
+        
+        // Verify the revealed data matches the commitment hash
+        bytes32 calculatedHash = keccak256(abi.encodePacked(position, wager, nonce));
+        require(
+            calculatedHash == commitmentHash,
+            "Revealed data does not match commitment hash"
+        );
+
+        // Mark commitment as revealed
+        commitment.revealed = true;
+
+        emit CommitmentRevealed(
+            marketId,
+            msg.sender,
+            commitmentHash,
+            position,
+            wager,
+            nonce
+        );
+    }
 
     /**
      * @dev Returns the total number of markets
