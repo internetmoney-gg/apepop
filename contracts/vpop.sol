@@ -11,6 +11,7 @@ contract VPOP is Ownable {
     uint256 public platformFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public creatorFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public apeFeeRate; // Fee rate in basis points (1% = 100)
+    address public apeOwner = 0x1000000000000000000000000000000000000000; // Address that receives ape fees
 
     struct Market {
         address creator;
@@ -58,7 +59,7 @@ contract VPOP is Ownable {
         uint256 upperBound,
         uint8 percentile
     );
-    
+
     event CommitmentCreated(
         uint256 indexed marketId,
         address indexed user,
@@ -193,7 +194,8 @@ contract VPOP is Ownable {
         uint256 platformFee = (wager * platformFeeRate) / 10000;
         // Calculate creator fee
         uint256 creatorFee = (wager * creatorFeeRate) / 10000;
-        
+        // Calculate ape fee
+        uint256 apeFee = (wager * apeFeeRate) / 10000;
         // Check if the market uses native token or ERC20
         if (market.token == address(0)) {
             // For native token (ETH), ensure the sent value matches the wager
@@ -205,6 +207,10 @@ contract VPOP is Ownable {
             // Transfer creator fee to market creator
             (bool creatorSuccess, ) = market.creator.call{value: creatorFee}("");
             require(creatorSuccess, "Creator fee transfer failed");
+
+            // Transfer ape fee to ape owner
+            (bool apeSuccess, ) = apeOwner.call{value: apeFee}("");
+            require(apeSuccess, "Ape fee transfer failed");
 
         } else {
             // Transfer ERC20 tokens from user to contract
@@ -224,6 +230,10 @@ contract VPOP is Ownable {
             require(
                 token.transfer(market.creator, creatorFee),
                 "Creator fee transfer failed"
+            );
+            require(
+                token.transfer(apeOwner, apeFee),
+                "Ape fee transfer failed"
             );
         }
 

@@ -27,10 +27,10 @@ module.exports = {
   // allowUnlimitedContractSize: true,
   networks: {
     hardhat: {
-      forking: {
-        url: process.env.MAINNET_RPC_URL,
-      },
-      chainId: 33111,
+      // forking: {
+      //   url: process.env.MAINNET_RPC_URL,
+      // },
+      // chainId: 33111,
       gasPrice: 5000000000000,
       allowUnlimitedContractSize: true,      
     },

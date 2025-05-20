@@ -7,11 +7,12 @@ import { expect } from "chai";
 import "@nomicfoundation/hardhat-chai-matchers";
 import hre from "hardhat";
 import { ethers } from "hardhat";
+import { TestToken, TestToken__factory } from "../typechain-types";
 
 // Helper function to create commitment hash
 function createCommitmentHash(position: bigint, wager: bigint, nonce: bigint): string {
   return ethers.keccak256(
-    ethers.AbiCoder.defaultAbiCoder().encode(
+    ethers.solidityPacked(
       ["uint256", "uint256", "uint256"],
       [position, wager, nonce]
     )
@@ -22,11 +23,14 @@ describe("VPOP", function () {
   let vpop: any;
   let owner: any;
   let otherAccount: any;
-
+  let thirdAccount: any;
+  let testToken: TestToken;
+  const apeAddress = "0x1000000000000000000000000000000000000000";
   before(async function() {
-    const [ownerSigner, otherAccountSigner] = await hre.ethers.getSigners();
+    const [ownerSigner, otherAccountSigner, thirdAccountSigner] = await hre.ethers.getSigners();
     owner = ownerSigner;
     otherAccount = otherAccountSigner;
+    thirdAccount = thirdAccountSigner;
 
     const VPOP = await hre.ethers.getContractFactory("VPOP");
     vpop = await VPOP.deploy();
@@ -309,10 +313,12 @@ describe("VPOP", function () {
       const platformFeeRate = await vpop.platformFeeRate();
       const creatorFeeRate = await vpop.creatorFeeRate();
       const apeFeeRate = await vpop.apeFeeRate();
+      const apeOwner = await vpop.apeOwner();
 
       expect(platformFeeRate).to.equal(800); // 8%
       expect(creatorFeeRate).to.equal(200); // 2%
       expect(apeFeeRate).to.equal(200); // 2%
+      expect(apeOwner).to.equal(apeAddress); // Initial ape owner should be zero address
     });
 
     it("Should allow owner to update fee rates", async function () {
@@ -349,6 +355,114 @@ describe("VPOP", function () {
       ).to.be.revertedWithCustomError(vpop, "OwnableUnauthorizedAccount");
     });
 
+    it("Should distribute fees correctly including ape fee", async function () {
+      // Create a market
+      await vpop.connect(otherAccount).initializeMarket(
+        ethers.ZeroAddress,
+        ethers.parseEther("1"),
+        ethers.parseEther("10"),
+        18,
+        ethers.parseEther("0.1"),
+        20,
+        3600,
+        3600,
+        50,
+        "QmTest123"
+      );
+
+      const marketCount = await vpop.getMarketCount();
+      const market = await vpop.markets(marketCount);
+      const marketCreator = market.creator;
+      expect(marketCreator).to.equal(otherAccount.address);
+
+      // Create commitment parameters
+      const position = 5000n;
+      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const wager = ethers.parseEther("1.0"); // 1 ETH wager
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      // Get initial balances
+      const initialOwnerBalance = await ethers.provider.getBalance(owner.address);
+      const initialCreatorBalance = await ethers.provider.getBalance(marketCreator);
+      const initialApeOwnerBalance = await ethers.provider.getBalance(apeAddress);
+
+      // Create commitment
+      await vpop.connect(thirdAccount).commit(marketCount, commitmentHash, wager, { value: wager });
+
+
+      // Calculate expected fees
+      const platformFee = (wager * 1000n) / 10000n; // 10%
+      const creatorFee = (wager * 300n) / 10000n; // 3%
+      const apeFee = (wager * 300n) / 10000n; // 3%
+
+      // Get final balances
+      const finalOwnerBalance = await ethers.provider.getBalance(owner.address);
+      const finalCreatorBalance = await ethers.provider.getBalance(marketCreator);
+      const finalApeOwnerBalance = await ethers.provider.getBalance(apeAddress);
+
+      // Verify fee distribution
+      expect(finalOwnerBalance - initialOwnerBalance).to.equal(platformFee);
+      expect(finalCreatorBalance - initialCreatorBalance).to.equal(creatorFee);
+      expect(finalApeOwnerBalance - initialApeOwnerBalance).to.equal(apeFee);
+    });
+
+    it("Should distribute ERC20 fees correctly including ape fee", async function () {
+      // Deploy a test ERC20 token
+      const TestToken = await ethers.getContractFactory("TestToken");
+      testToken = await TestToken.deploy();
+      await testToken.waitForDeployment();
+
+      // Mint tokens to the test account
+      const wager = ethers.parseEther("1.0"); // 1 token
+      await testToken.mint(thirdAccount.address, wager * 2n); // Mint extra for fees
+      await testToken.connect(thirdAccount).approve(await vpop.getAddress(), wager * 2n);
+
+      // Create a market with the test token
+      await vpop.connect(otherAccount).initializeMarket(
+        await testToken.getAddress(),
+        ethers.parseEther("1"),
+        ethers.parseEther("10"),
+        18,
+        ethers.parseEther("0.1"),
+        20,
+        3600,
+        3600,
+        50,
+        "QmTest123"
+      );
+
+      const marketCount = await vpop.getMarketCount();
+      const market = await vpop.markets(marketCount);
+      const marketCreator = market.creator;
+      
+      // Create commitment parameters
+      const position = 5000n;
+      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      // Get initial balances
+      const initialOwnerBalance = await testToken.balanceOf(owner.address);
+      const initialCreatorBalance = await testToken.balanceOf(marketCreator);
+      const initialApeOwnerBalance = await testToken.balanceOf(apeAddress);
+
+      // Create commitment
+      await vpop.connect(thirdAccount).commit(marketCount, commitmentHash, wager);
+
+      // Calculate expected fees
+      const platformFee = (wager * 1000n) / 10000n; // 10%
+      const creatorFee = (wager * 300n) / 10000n; // 3%
+      const apeFee = (wager * 300n) / 10000n; // 3%
+
+      // Get final balances
+      const finalOwnerBalance = await testToken.balanceOf(owner.address);
+      const finalCreatorBalance = await testToken.balanceOf(marketCreator);
+      const finalApeOwnerBalance = await testToken.balanceOf(apeAddress);
+
+      // Verify fee distribution
+      expect(finalOwnerBalance - initialOwnerBalance).to.equal(platformFee);
+      expect(finalCreatorBalance - initialCreatorBalance).to.equal(creatorFee);
+      expect(finalApeOwnerBalance - initialApeOwnerBalance).to.equal(apeFee);
+    });
   });
 
   describe("Reveal Phase", function () {
@@ -397,9 +511,6 @@ describe("VPOP", function () {
       const commitment = await vpop.commitments(marketCount, commitmentHash);
       expect(commitment.revealed).to.be.true;
 
-      // // Verify the event was emitted
-      // const event = receipt?.logs[0];
-      // expect(event?.topics[0]).to.equal(ethers.id("CommitmentRevealed(uint256,address,bytes32,uint256,uint256)"));
     });
 
     it("Should fail when revealing during commit phase", async function () {
