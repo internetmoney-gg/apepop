@@ -182,8 +182,11 @@ describe("VPOP", function () {
       const receipt = await tx.wait();
       const event = receipt?.logs[0];
 
+      const marketConsensus = await vpop.marketConsensus(marketCount);
+      const commitmentId = marketConsensus.totalCommitments;
+      
       // Verify commitment was created
-      const commitment = await vpop.commitments(marketCount, commitmentHash);
+      const commitment = await vpop.commitments(marketCount, commitmentId);
       expect(commitment.commitmentHash).to.equal(commitmentHash);
       expect(commitment.wager).to.equal(wager);
       expect(commitment.position).to.equal(0); // Position should be 0 until revealed
@@ -299,8 +302,8 @@ describe("VPOP", function () {
       await vpop.commit(marketCount, commitmentHash2, wager, { value: wager });
 
       // Verify commitments exist
-      const commitment1 = await vpop.commitments(marketCount, commitmentHash1);
-      const commitment2 = await vpop.commitments(marketCount, commitmentHash2);
+      const commitment1 = await vpop.commitments(marketCount, 1);
+      const commitment2 = await vpop.commitments(marketCount, 2);
       expect(commitment1.commitmentHash).to.equal(commitmentHash1);
       expect(commitment2.commitmentHash).to.equal(commitmentHash2);
       expect(commitment1.position).to.equal(0); // Position should be 0 until revealed
@@ -500,6 +503,7 @@ describe("VPOP", function () {
       // Reveal the commitment
       const tx = await vpop.reveal(
         marketCount,
+        1,
         commitmentHash,
         position,
         wager,
@@ -508,7 +512,7 @@ describe("VPOP", function () {
       const receipt = await tx.wait();
 
       // Verify the commitment is marked as revealed
-      const commitment = await vpop.commitments(marketCount, commitmentHash);
+      const commitment = await vpop.commitments(marketCount, 1);
       expect(commitment.revealed).to.be.true;
 
     });
@@ -545,6 +549,7 @@ describe("VPOP", function () {
       await expect(
         vpop.reveal(
           marketCount,
+          1,
           commitmentHash,
           position,
           wager,
@@ -588,6 +593,7 @@ describe("VPOP", function () {
       await expect(
         vpop.reveal(
           marketCount,
+          1,
           commitmentHash,
           position,
           wager,
@@ -632,6 +638,7 @@ describe("VPOP", function () {
       await expect(
         vpop.reveal(
           marketCount,
+          1,
           commitmentHash,
           incorrectPosition,
           wager,
@@ -648,7 +655,7 @@ describe("VPOP", function () {
         ethers.parseEther("10"),
         18,
         ethers.parseEther("0.1"),
-        20,
+        0,
         3600,
         3600,
         50,
@@ -674,6 +681,7 @@ describe("VPOP", function () {
       // Reveal the commitment
       await vpop.reveal(
         marketCount,
+        1,
         commitmentHash,
         position,
         wager,
@@ -684,6 +692,7 @@ describe("VPOP", function () {
       await expect(
         vpop.reveal(
           marketCount,
+          1,
           commitmentHash,
           position,
           wager,
@@ -692,6 +701,97 @@ describe("VPOP", function () {
       ).to.be.revertedWith("Commitment already revealed");
     });
   });
+
+  describe("Market Resolve", function () {
+    it("should resolve only after reveal phase or all revealed, and set consensus and winning threshold", async function () {
+      // Use existing signers
+      const signers = [owner, otherAccount, thirdAccount];
+
+      // Create a market
+      await vpop.initializeMarket(
+        ethers.ZeroAddress,
+        0,
+        1000,
+        1,
+        ethers.parseEther("0.1"),
+        0,
+        3600, // 1 hour commit
+        3600, // 1 hour reveal
+        2000, // 20% percentile
+        "ipfs://resolve-test"
+      );
+      const marketId = await vpop.getMarketCount();
+
+      // Commitments
+      const positions = [
+        120n,
+        150n,
+        180n
+      ];
+      const wagers = [
+        ethers.parseEther("1"),
+        ethers.parseEther("2"),
+        ethers.parseEther("1")
+      ];
+      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
+
+      // Move to reveal phase
+      await time.increase(3500);
+
+      // Submit commitments
+      for (let i = 0; i < 3; i++) {
+        await vpop.connect(signers[i]).commit(marketId, commitmentHashes[i], wagers[i], { value: wagers[i] });
+      }
+
+      // Move to reveal phase
+      await time.increase(200);
+
+      // Reveal only the first two
+      for (let i = 0; i < 2; i++) {
+        // console.log('positions[i]: ',positions[i])
+        await vpop.connect(signers[i]).reveal(
+          marketId,
+          i+1,
+          commitmentHashes[i],
+          positions[i],
+          wagers[i],
+          nonces[i]
+        );
+      }
+
+      const revealedmMrketConsensus = await vpop.marketConsensus(marketId);
+
+      // Try to resolve before reveal phase ends (should fail)
+      await expect(vpop.resolve(marketId)).to.be.revertedWith("Market not ready for resolution");
+
+      // Move to after reveal phase
+      await time.increase(3601);
+
+      // Now resolve should succeed
+      await vpop.resolve(marketId);
+      const consensus = await vpop.getMarketConsensus(marketId);
+      const marketConsensus = await vpop.marketConsensus(marketId);
+      expect(marketConsensus.resolved).to.be.true;
+      expect(consensus).to.be.gt(0);
+      expect(marketConsensus.winningThreshold).to.be.gte(0);
+
+      // The consensus should be the weighted average of revealed positions
+      const totalWeight = wagers[0] + wagers[1];
+      const weightedSum = positions[0] * wagers[0] + positions[1] * wagers[1];
+      const expectedConsensus = weightedSum / totalWeight;
+      expect(consensus).to.equal(expectedConsensus);
+
+      // Try to resolve again - should fail
+      await expect(vpop.resolve(marketId)).to.be.revertedWith("Market already resolved");
+      // The third (unrevealed) commitment should not affect consensus or threshold
+      // Only revealed commitments are considered
+    });
+
+  });
+
+  // add a new set of functions to ensure the winning threshold is correct, and that only those positions within the winning threshold is able to claim winnings
+  
 });
 
 

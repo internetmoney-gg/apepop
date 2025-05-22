@@ -25,8 +25,24 @@ contract VPOP is Ownable {
         uint256 decayFactor;
         uint256 commitDuration;
         uint256 revealDuration;
-        uint8 percentile;
+        uint16 percentile;
         string ipfsHash;
+    }
+
+    struct MarketConsensus {
+        uint256 totalWagers;
+        uint256 totalWinnings;
+        // Market consensus tracking
+        uint256 totalWeight;
+        uint256 weightedSum;
+        // Market status
+        bool resolved;
+        // Commitment tracking
+        uint256 totalCommitments;
+        uint256 revealedCommitments;
+        // Resolution data
+        uint256 winningThreshold;
+        uint256 consensusPosition;
     }
 
     struct Commitment {
@@ -37,17 +53,17 @@ contract VPOP is Ownable {
         bool revealed;
         uint256 position;
         uint256 nonce;
+        bool claimed;
     }
-
 
     // Mapping to store markets by their ID
     mapping(uint256 => Market) public markets;
+    mapping(uint256 => MarketConsensus) public marketConsensus;
     
-    // Mapping to store commitments by market ID and user address
-    mapping(uint256 => mapping(bytes32 => Commitment)) public commitments;
-    // Counter to track the number of commitments for each market
+    // Mapping to store commitments by market ID and sequential commitment ID
+    mapping(uint256 => mapping(uint256 => Commitment)) public commitments;
 
-    // // Counter for market IDs
+    // Counter for market IDs
     uint256 private _marketIdCounter;
     
     // Events
@@ -57,12 +73,13 @@ contract VPOP is Ownable {
         address token,
         uint256 lowerBound,
         uint256 upperBound,
-        uint8 percentile
+        uint16 percentile
     );
 
     event CommitmentCreated(
         uint256 indexed marketId,
         address indexed user,
+        uint256 commitmentId,
         bytes32 commitmentHash,
         uint256 wager,
         uint256 weight
@@ -71,12 +88,19 @@ contract VPOP is Ownable {
     event CommitmentRevealed(
         uint256 indexed marketId,
         address indexed user,
+        uint256 commitmentId,
         bytes32 commitmentHash,
         uint256 position,
         uint256 wager,
         uint256 nonce
     );
 
+    event WinningsClaimed(
+        uint256 indexed marketId,
+        address indexed user,
+        uint256 commitmentId,
+        uint256 amount
+    );
 
     constructor() payable Ownable(msg.sender) {
         _marketIdCounter = 0;
@@ -88,6 +112,8 @@ contract VPOP is Ownable {
     /**
      * @dev Updates the fee rate. Only callable by the owner.
      * @param _newPlatformFeeRate The new fee rate in basis points (1% = 100)
+     * @param _newCreatorFeeRate The new fee rate in basis points (1% = 100)
+     * @param _newApeFeeRate The new fee rate in basis points (1% = 100)
      */
     function updatePlatformSettings(uint256 _newPlatformFeeRate, uint256 _newCreatorFeeRate, uint256 _newApeFeeRate) external onlyOwner {
         platformFeeRate = _newPlatformFeeRate;
@@ -104,7 +130,7 @@ contract VPOP is Ownable {
      * @param _decayFactor The decay factor for the market
      * @param _commitDuration The duration of the commit phase in seconds
      * @param _revealDuration The duration of the reveal phase in seconds
-     * @param _percentile The percentile value (0-100)
+     * @param _percentile The percentile value (0-10000)
      * @param _ipfsHash The IPFS hash containing additional market data
      * @return marketId The ID of the newly created market
      */
@@ -114,26 +140,25 @@ contract VPOP is Ownable {
         uint256 _upperBound,
         uint8 _decimals,
         uint256 _minWager,
-        uint8 _decayFactor,
+        uint16 _decayFactor,
         uint256 _commitDuration,
         uint256 _revealDuration,
-        uint8 _percentile,
+        uint16 _percentile,
         string memory _ipfsHash
     ) public returns (uint256 marketId) {
         // Input validation
         require(_lowerBound < _upperBound, "Lower bound must be less than upper bound");
         require(_decimals <= 18, "Decimals must be <= 18");
         require(_minWager > 0, "Minimum wager must be greater than 0");
-        require(_decayFactor > 0, "Decay factor must be greater than 0");
+        require(_decayFactor <= 10000, "Decay factor must be <= 10000 (100%)");
         require(_commitDuration > 0, "Commit duration must be greater than 0");
         require(_revealDuration > 0, "Reveal duration must be greater than 0");
-        require(_percentile <= 100, "Percentile must be <= 100");
+        require(_percentile <= 10000, "Percentile must be <= 10000 (100%)");
         require(bytes(_ipfsHash).length > 0, "IPFS hash cannot be empty");
 
         // Get the next market ID and increment the counter
          _marketIdCounter++;
         marketId = _marketIdCounter;
-       
 
         Market memory newMarket = Market({
             creator: msg.sender,
@@ -150,9 +175,21 @@ contract VPOP is Ownable {
             ipfsHash: _ipfsHash
         });
 
+        MarketConsensus memory newMarketConsensus = MarketConsensus({
+            totalWagers: 0,
+            totalWinnings: 0,
+            totalWeight: 0,
+            weightedSum: 0,
+            resolved: false,
+            totalCommitments: 0,
+            revealedCommitments: 0,
+            winningThreshold: 0,
+            consensusPosition: 0
+        });
+
         // Store the market in the mapping
         markets[marketId] = newMarket;
-
+        marketConsensus[marketId] = newMarketConsensus;
         emit MarketCreated(
             marketId,
             msg.sender,
@@ -196,6 +233,11 @@ contract VPOP is Ownable {
         uint256 creatorFee = (wager * creatorFeeRate) / 10000;
         // Calculate ape fee
         uint256 apeFee = (wager * apeFeeRate) / 10000;
+        // Add to the pot 
+        uint256 winnings = wager - platformFee - creatorFee - apeFee;
+        marketConsensus[marketId].totalWinnings += winnings;
+        marketConsensus[marketId].totalWagers += wager;
+
         // Check if the market uses native token or ERC20
         if (market.token == address(0)) {
             // For native token (ETH), ensure the sent value matches the wager
@@ -238,22 +280,32 @@ contract VPOP is Ownable {
         }
 
         // Calculate weight
-        uint256 weight = wager * market.decayFactor * ((block.timestamp - market.createdAt) / market.commitDuration);
+        // uint256 weight = wager * (10000 - market.decayFactor) * ((block.timestamp - market.createdAt)*10000 / market.commitDuration) / 100;
+        uint256 weight = wager - (wager * market.decayFactor * ((block.timestamp - market.createdAt) * 10000 / market.commitDuration) / 10000 / 10000);
+        
+        // Increment total commitments counter
+        marketConsensus[marketId].totalCommitments++;
+        // Get the next commitment ID
+        uint256 commitmentId = marketConsensus[marketId].totalCommitments;
         
         // Store the commitment
-        commitments[marketId][commitmentHash] = Commitment({
+        commitments[marketId][commitmentId] = Commitment({
             commitmentHash: commitmentHash,
             wager: wager,
             weight: weight,
             timestamp: block.timestamp,
             revealed: false,
             position: 0, // Will be set during reveal
-            nonce: 0    // Will be set during reveal
+            nonce: 0,    // Will be set during reveal
+            claimed: false
         });
+
+        
 
         emit CommitmentCreated(
             marketId,
             msg.sender,
+            commitmentId,
             commitmentHash,
             wager,
             weight
@@ -263,6 +315,7 @@ contract VPOP is Ownable {
     /**
      * @dev Reveal a commitment by providing the original data
      * @param marketId The ID of the market
+     * @param commitmentId The ID of the commitment to reveal
      * @param commitmentHash The hash of the commitment to reveal
      * @param position The original position value
      * @param wager The original wager amount
@@ -270,6 +323,7 @@ contract VPOP is Ownable {
      */
     function reveal(
         uint256 marketId,
+        uint256 commitmentId,
         bytes32 commitmentHash,
         uint256 position,
         uint256 wager,
@@ -288,8 +342,7 @@ contract VPOP is Ownable {
         );
 
         // Get the commitment
-        Commitment storage commitment = commitments[marketId][commitmentHash];
-        
+        Commitment storage commitment = commitments[marketId][commitmentId];
         // Verify commitment exists and hasn't been revealed
         require(commitment.commitmentHash == commitmentHash, "Commitment does not exist");
         require(!commitment.revealed, "Commitment already revealed");
@@ -301,17 +354,121 @@ contract VPOP is Ownable {
             "Revealed data does not match commitment hash"
         );
 
-        // Mark commitment as revealed
+        // Update market consensus
+        marketConsensus[marketId].totalWeight += commitment.weight;
+        marketConsensus[marketId].weightedSum += position * commitment.weight;
+        marketConsensus[marketId].consensusPosition = marketConsensus[marketId].weightedSum / marketConsensus[marketId].totalWeight;
+        marketConsensus[marketId].revealedCommitments++;
+        
+        // Mark commitment as revealed and increment revealed counter
         commitment.revealed = true;
+        commitment.position = position;
 
         emit CommitmentRevealed(
             marketId,
             msg.sender,
+            commitmentId,
             commitmentHash,
             position,
             wager,
             nonce
         );
+    }
+
+    /**
+     * @dev Resolves a market after checking reveal status
+     * @param marketId The ID of the market to resolve
+     */
+    function resolve(uint256 marketId) external {
+        // Validate market exists
+        require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
+        
+        Market storage market = markets[marketId];
+        MarketConsensus storage consensus = marketConsensus[marketId];
+        
+        // Check if market is already resolved
+        require(!consensus.resolved, "Market already resolved");
+
+        // Check if reveal phase has ended
+        bool revealPhaseEnded = block.timestamp > market.createdAt + market.commitDuration + market.revealDuration;
+        
+        // Check if all commitments have been revealed
+        bool allRevealed = consensus.totalCommitments > 0 && consensus.totalCommitments == consensus.revealedCommitments;
+
+        // Require either all commitments revealed or reveal phase ended
+        require(allRevealed || revealPhaseEnded, "Market not ready for resolution");
+
+        // Calculate market consensus
+        require(consensus.totalWeight > 0, "No commitments to resolve");
+        consensus.consensusPosition = consensus.weightedSum / consensus.totalWeight;
+
+        // Calculate distances from consensus for each revealed commitment
+        uint256[] memory distances = new uint256[](consensus.revealedCommitments);
+        uint256[] memory positions = new uint256[](consensus.revealedCommitments);
+        uint256 distanceIndex = 0;
+
+        // Collect all revealed positions and calculate distances
+        for (uint32 i = 0; i < consensus.totalCommitments; i++) {
+            Commitment storage commitment = commitments[marketId][i];
+            
+            if (commitment.revealed) {
+                positions[distanceIndex] = commitment.position;
+                // Calculate absolute distance from consensus
+                distances[distanceIndex] = commitment.position > consensus.consensusPosition ? 
+                    commitment.position - consensus.consensusPosition : 
+                    consensus.consensusPosition - commitment.position;
+                distanceIndex++;
+            }
+        }
+
+        // Sort distances and positions (bubble sort for simplicity)
+        for (uint32 i = 0; i < distanceIndex - 1; i++) {
+            for (uint32 j = 0; j < distanceIndex - i - 1; j++) {
+                if (distances[j] > distances[j + 1]) {
+                    // Swap distances
+                    uint256 tempDist = distances[j];
+                    distances[j] = distances[j + 1];
+                    distances[j + 1] = tempDist;
+                    
+                    // Swap positions
+                    uint256 tempPos = positions[j];
+                    positions[j] = positions[j + 1];
+                    positions[j + 1] = tempPos;
+                }
+            }
+        }
+
+        // Calculate winning threshold based on percentile
+        // If percentile is 1000 (10%), we take the distance of the 10% closest commitment
+        uint256 winningIndex = (distanceIndex * market.percentile) / 10000;
+        if (winningIndex >= distanceIndex) {
+            winningIndex = distanceIndex - 1;
+        }
+        consensus.winningThreshold = distances[winningIndex];
+
+        // Mark market as resolved
+        consensus.resolved = true;
+    }
+
+
+    
+
+
+    /**
+     * @dev Returns whether a position is a winning position
+     * @param marketId The ID of the market
+     * @param position The position to check
+     * @return bool True if the position is a winning position
+     */
+    function isWinningPosition(uint256 marketId, uint256 position) public view returns (bool) {
+        MarketConsensus storage consensus = marketConsensus[marketId];
+        require(consensus.resolved, "Market not resolved");
+        
+        uint256 distance = position > consensus.consensusPosition ? 
+            position - consensus.consensusPosition : 
+            consensus.consensusPosition - position;
+            
+        return distance <= consensus.winningThreshold;
     }
 
     /**
@@ -327,5 +484,56 @@ contract VPOP is Ownable {
      */
     function getMarket(uint256 marketId) public view returns (Market memory) {
         return markets[marketId];
+    }
+
+    /**
+     * @dev Returns the current market consensus (weighted average of positions)
+     * @param marketId The ID of the market to check
+     * @return The current market consensus
+     */
+    function getMarketConsensus(uint256 marketId) public view returns (uint256) {
+        if (marketConsensus[marketId].totalWeight == 0) return 0;
+        return marketConsensus[marketId].weightedSum / marketConsensus[marketId].totalWeight;
+    }
+
+    /**
+     * @dev Allows winners to claim their portion of the winnings
+     * @param marketId The ID of the market to claim from
+     * @param commitmentId The ID of the commitment to claim for
+     */
+    function claim(uint256 marketId, uint256 commitmentId) external {
+        // Validate market exists and is resolved
+        require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
+        MarketConsensus storage consensus = marketConsensus[marketId];
+        require(consensus.resolved, "Market not resolved");
+
+        // Get the commitment
+        Commitment storage commitment = commitments[marketId][commitmentId];
+        require(commitment.revealed, "Commitment not revealed");
+        require(!commitment.claimed, "Already claimed");
+
+        // Check if position is winning
+        uint256 distance = commitment.position > consensus.consensusPosition ? 
+            commitment.position - consensus.consensusPosition : 
+            consensus.consensusPosition - commitment.position;
+        require(distance <= consensus.winningThreshold, "Not a winning position");
+
+        // Calculate winnings based on proportion of total winning wagers
+        uint256 winnings = (commitment.wager * consensus.totalWinnings) / consensus.totalWagers;
+
+        // Mark as claimed
+        commitment.claimed = true;
+
+        // Transfer winnings
+        Market storage market = markets[marketId];
+        if (market.token == address(0)) {
+            (bool success, ) = msg.sender.call{value: winnings}("");
+            require(success, "Transfer failed");
+        } else {
+            IERC20 token = IERC20(market.token);
+            require(token.transfer(msg.sender, winnings), "Token transfer failed");
+        }
+
+        emit WinningsClaimed(marketId, msg.sender, commitmentId, winnings);
     }
 }
