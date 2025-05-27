@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "hardhat/console.sol";
 
 /**
  * @title VPOP
@@ -388,16 +389,12 @@ contract VPOP is Ownable {
         
         // Check if market is already resolved
         require(!consensus.resolved, "Market already resolved");
-
         // Check if reveal phase has ended
         bool revealPhaseEnded = block.timestamp > market.createdAt + market.commitDuration + market.revealDuration;
-        
         // Check if all commitments have been revealed
         bool allRevealed = consensus.totalCommitments > 0 && consensus.totalCommitments == consensus.revealedCommitments;
-
         // Require either all commitments revealed or reveal phase ended
         require(allRevealed || revealPhaseEnded, "Market not ready for resolution");
-
         // Calculate market consensus
         require(consensus.totalWeight > 0, "No commitments to resolve");
         consensus.consensusPosition = consensus.weightedSum / consensus.totalWeight;
@@ -421,79 +418,38 @@ contract VPOP is Ownable {
             }
         }
 
-        // Sort distances and positions (bubble sort for simplicity)
-        for (uint32 i = 0; i < distanceIndex - 1; i++) {
-            for (uint32 j = 0; j < distanceIndex - i - 1; j++) {
-                if (distances[j] > distances[j + 1]) {
-                    // Swap distances
-                    uint256 tempDist = distances[j];
-                    distances[j] = distances[j + 1];
-                    distances[j + 1] = tempDist;
-                    
-                    // Swap positions
-                    uint256 tempPos = positions[j];
-                    positions[j] = positions[j + 1];
-                    positions[j + 1] = tempPos;
+        if(distanceIndex > 0){
+            // Sort distances and positions (bubble sort for simplicity)
+            for (uint32 i = 0; i < distanceIndex - 1; i++) {
+                for (uint32 j = 0; j < distanceIndex - i - 1; j++) {
+                    if (distances[j] > distances[j + 1]) {
+                        // Swap distances
+                        uint256 tempDist = distances[j];
+                        distances[j] = distances[j + 1];
+                        distances[j + 1] = tempDist;
+                        
+                        // Swap positions
+                        uint256 tempPos = positions[j];
+                        positions[j] = positions[j + 1];
+                        positions[j + 1] = tempPos;
+                    }
                 }
             }
         }
-
         // Calculate winning threshold based on percentile
         // If percentile is 1000 (10%), we take the distance of the 10% closest commitment
-        uint256 winningIndex = (distanceIndex * market.percentile) / 10000;
-        if (winningIndex >= distanceIndex) {
-            winningIndex = distanceIndex - 1;
+        if(distances.length > 1){
+            uint256 winningIndex = (distanceIndex * market.percentile) / 10000;
+            if (winningIndex >= distanceIndex) {
+                winningIndex = distanceIndex - 1;
+            }
+            consensus.winningThreshold = distances[winningIndex];
         }
-        consensus.winningThreshold = distances[winningIndex];
-
+        else{
+            consensus.winningThreshold = 0;
+        }
         // Mark market as resolved
         consensus.resolved = true;
-    }
-
-
-    
-
-
-    /**
-     * @dev Returns whether a position is a winning position
-     * @param marketId The ID of the market
-     * @param position The position to check
-     * @return bool True if the position is a winning position
-     */
-    function isWinningPosition(uint256 marketId, uint256 position) public view returns (bool) {
-        MarketConsensus storage consensus = marketConsensus[marketId];
-        require(consensus.resolved, "Market not resolved");
-        
-        uint256 distance = position > consensus.consensusPosition ? 
-            position - consensus.consensusPosition : 
-            consensus.consensusPosition - position;
-            
-        return distance <= consensus.winningThreshold;
-    }
-
-    /**
-     * @dev Returns the total number of markets
-     */
-    function getMarketCount() public view returns (uint256) {
-        return _marketIdCounter;
-    }
-
-    /**
-     * @dev Returns a a market by its ID
-     * @param marketId The ID of the market to check
-     */
-    function getMarket(uint256 marketId) public view returns (Market memory) {
-        return markets[marketId];
-    }
-
-    /**
-     * @dev Returns the current market consensus (weighted average of positions)
-     * @param marketId The ID of the market to check
-     * @return The current market consensus
-     */
-    function getMarketConsensus(uint256 marketId) public view returns (uint256) {
-        if (marketConsensus[marketId].totalWeight == 0) return 0;
-        return marketConsensus[marketId].weightedSum / marketConsensus[marketId].totalWeight;
     }
 
     /**
@@ -536,4 +492,41 @@ contract VPOP is Ownable {
 
         emit WinningsClaimed(marketId, msg.sender, commitmentId, winnings);
     }
+    
+
+
+    /**
+     * @dev Returns whether a position is a winning position
+     * @param marketId The ID of the market
+     * @param position The position to check
+     * @return bool True if the position is a winning position
+     */
+    function isWinningPosition(uint256 marketId, uint256 position) public view returns (bool) {
+        MarketConsensus storage consensus = marketConsensus[marketId];
+        require(consensus.resolved, "Market not resolved");
+        
+        uint256 distance = position > consensus.consensusPosition ? 
+            position - consensus.consensusPosition : 
+            consensus.consensusPosition - position;
+            
+        return distance <= consensus.winningThreshold;
+    }
+
+    /**
+     * @dev Returns the total number of markets
+     */
+    function getMarketCount() public view returns (uint256) {
+        return _marketIdCounter;
+    }
+
+    /**
+     * @dev Returns a a market by its ID
+     * @param marketId The ID of the market to check
+     */
+    function getMarket(uint256 marketId) public view returns (Market memory) {
+        return markets[marketId];
+    }
+
+
+   
 }

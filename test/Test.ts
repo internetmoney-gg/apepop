@@ -770,8 +770,9 @@ describe("VPOP", function () {
 
       // Now resolve should succeed
       await vpop.resolve(marketId);
-      const consensus = await vpop.getMarketConsensus(marketId);
+      
       const marketConsensus = await vpop.marketConsensus(marketId);
+      const consensus = marketConsensus.consensusPosition;
       expect(marketConsensus.resolved).to.be.true;
       expect(consensus).to.be.gt(0);
       expect(marketConsensus.winningThreshold).to.be.gte(0);
@@ -790,8 +791,179 @@ describe("VPOP", function () {
 
   });
 
-  // add a new set of functions to ensure the winning threshold is correct, and that only those positions within the winning threshold is able to claim winnings
-  
+  describe("Claim Winnings", function () {
+    it("should calculate correct winning threshold and allow only winning positions to claim", async function () {
+      // Create a market with 20% percentile
+      await vpop.initializeMarket(
+        ethers.ZeroAddress,
+        1000,
+        2000,
+        0,
+        ethers.parseEther("0.1"),
+        1,
+        3600,
+        3600,
+        2000, // 20% percentile
+        "ipfs://threshold-test"
+      );
+      const marketId = await vpop.getMarketCount();
+
+      // Create commitments with different positions
+      const positions = [
+        1200n, // Far below
+        1500n, // Below
+        1600n, // Middle
+        1700n, // Above
+        1800n  // Far above
+      ];
+      const wagers = [
+        ethers.parseEther("1"),
+        ethers.parseEther("2"),
+        ethers.parseEther("3"),
+        ethers.parseEther("2"),
+        ethers.parseEther("1")
+      ];
+      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
+
+      // Submit all commitments
+      for (let i = 0; i < 5; i++) {
+        await vpop.connect([owner, otherAccount, thirdAccount, owner, otherAccount][i])
+          .commit(marketId, commitmentHashes[i], wagers[i], { value: wagers[i] });
+      }
+
+      // Move to reveal phase
+      await time.increase(3601);
+
+      // Reveal all commitments
+      for (let i = 0; i < 5; i++) {
+        await vpop.connect([owner, otherAccount, thirdAccount, owner, otherAccount][i])
+          .reveal(marketId, i+1, commitmentHashes[i], positions[i], wagers[i], nonces[i]);
+      }
+
+      // Verify all commitments have been revealed
+      const marketConsensusBeforeResolve   = await vpop.marketConsensus(marketId);
+      expect(marketConsensusBeforeResolve.totalCommitments).to.equal(5);
+      expect(marketConsensusBeforeResolve.revealedCommitments).to.equal(5);
+      // Move to resolution phase
+      await time.increase(3601);
+
+      // Resolve market
+      await vpop.resolve(marketId);
+
+      // Get market consensus and threshold
+      // const consensus = await vpop.getMarketConsensus(marketId);
+      const marketConsensus = await vpop.marketConsensus(marketId);
+      const consensus = marketConsensus.consensusPosition;
+      const threshold = marketConsensus.winningThreshold;
+      
+      // Calculate distances from consensus
+      const distances = positions.map(pos => 
+        pos > consensus ? pos - consensus : consensus - pos
+      );
+      
+
+
+      // Try to claim for each position
+      for (let i = 0; i < 5; i++) {
+        const distance = positions[i] > consensus ? positions[i] - consensus : consensus - positions[i];
+        const isWinning = distance <= threshold;
+        if (isWinning) {
+          // Should succeed for winning positions
+          await expect(vpop.connect([owner, otherAccount, thirdAccount, owner, otherAccount][i])
+            .claim(marketId, i+1))
+            .to.not.be.reverted;
+        } else {
+          // Should fail for non-winning positions
+          await expect(vpop.connect([owner, otherAccount, thirdAccount, owner, otherAccount][i])
+            .claim(marketId, i+1))
+            .to.be.revertedWith("Not a winning position");
+        }
+      }
+
+      // Verify winning positions received their winnings
+      const totalWinnings = marketConsensus.totalWinnings;
+      const totalWinningWagers = wagers.reduce((sum, wager, i) => 
+        distances[i] <= threshold ? sum + wager : sum, 0n);
+
+      for (let i = 0; i < 5; i++) {
+        if (distances[i] <= threshold) {
+          const expectedWinnings = (wagers[i] * totalWinnings) / totalWinningWagers;
+          const balance = await ethers.provider.getBalance([owner, otherAccount, thirdAccount, owner, otherAccount][i].address);
+          expect(balance).to.be.gt(0); // Should have received winnings
+        }
+      }
+    });
+
+    it("should not allow claiming before market resolution", async function () {
+      // Create market and commitment
+      await vpop.initializeMarket(
+        ethers.ZeroAddress,
+        1000,
+        2000,
+        0,
+        ethers.parseEther("0.1"),
+        1,
+        3600,
+        3600,
+        2000, // 20% percentile
+        "ipfs://threshold-test"
+      );
+      const marketId = await vpop.getMarketCount();
+
+      const position = 1500n;
+      const wager = ethers.parseEther("1");
+      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      await vpop.commit(marketId, commitmentHash, wager, { value: wager });
+      await time.increase(3601);
+      await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
+
+      // Try to claim before resolution
+      await expect(vpop.claim(marketId, 1))
+        .to.be.revertedWith("Market not resolved");
+    });
+
+    it("should not allow claiming unrevealed commitments", async function () {
+      // Create market and commitment
+      await vpop.initializeMarket(
+        ethers.ZeroAddress,
+        1000,
+        2000,
+        0,
+        ethers.parseEther("0.1"),
+        1,
+        3600,
+        3600,
+        2000, // 20% percentile
+        "ipfs://threshold-test"
+      );
+      const marketId = await vpop.getMarketCount();
+     
+
+      const position = 1500n;
+      const wager = ethers.parseEther("1");
+      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      await vpop.commit(marketId, commitmentHash, wager, { value: wager });
+
+      const position2 = 1600n;
+      const wager2 = ethers.parseEther("1");
+      const nonce2 = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const commitmentHash2 = createCommitmentHash(position2, wager2, nonce2);
+
+      await vpop.commit(marketId, commitmentHash2, wager2, { value: wager2 });
+      await time.increase(3601);
+      await vpop.reveal(marketId, 2, commitmentHash2, position2, wager2, nonce2);
+      await time.increase(7201); // Move past reveal phase
+      await vpop.resolve(marketId);
+      // Try to claim unrevealed commitment
+      await expect(vpop.claim(marketId, 1))
+        .to.be.revertedWith("Commitment not revealed");
+    });
+  });
 });
 
 
