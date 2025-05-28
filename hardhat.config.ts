@@ -30,11 +30,16 @@ module.exports = {
       // forking: {
       //   url: process.env.MAINNET_RPC_URL,
       // },
-      // chainId: 33111,
+      // chainId: 33139,
       gasPrice: 5000000000000,
       allowUnlimitedContractSize: true,      
     },
     
+    curtis: {
+      url: "https://curtis.rpc.caldera.xyz/http",
+      chainId: 33111,
+      accounts: [process.env.CURTIS_PRIVATE_KEY],
+    }
     // remote: {
     //   url: 'http://ec2-3-89-186-112.compute-1.amazonaws.com:8545',
     //   chainId: 31337,

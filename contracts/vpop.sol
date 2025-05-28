@@ -3,6 +3,8 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+
 import "hardhat/console.sol";
 
 /**
@@ -60,7 +62,9 @@ contract VPOP is Ownable {
     // Mapping to store markets by their ID
     mapping(uint256 => Market) public markets;
     mapping(uint256 => MarketConsensus) public marketConsensus;
-    
+    mapping(uint256 => bytes32) public whitelistRoots;
+    mapping(uint256 => mapping(address => bool)) public whitelistCommits;
+
     // Mapping to store commitments by market ID and sequential commitment ID
     mapping(uint256 => mapping(uint256 => Commitment)) public commitments;
 
@@ -122,8 +126,27 @@ contract VPOP is Ownable {
         apeFeeRate = _newApeFeeRate;
     }
 
+    function updateWhitelistRoot(uint256 marketId, bytes32 whitelistRoot) external onlyOwner {
+        whitelistRoots[marketId] = whitelistRoot;
+    }
+
+    function addWinnings(uint256 marketId, uint256 additionalWinnings) external payable {
+        Market storage market = markets[marketId];
+        
+        if (market.token != address(0)) {
+            // ERC20 token transfer
+            IERC20(market.token).transferFrom(msg.sender, address(this), additionalWinnings);
+        } else {
+            // ETH transfer
+            require(msg.value == additionalWinnings, "Sent value must match additional winnings");
+        }
+        
+        marketConsensus[marketId].totalWinnings += additionalWinnings;
+    }
+
     /**
      * @dev Initializes a new market with the given parameters
+     * @param _token The token address for the market
      * @param _lowerBound The lower bound of the market range
      * @param _upperBound The upper bound of the market range
      * @param _decimals The number of decimal places for the market
@@ -133,6 +156,7 @@ contract VPOP is Ownable {
      * @param _revealDuration The duration of the reveal phase in seconds
      * @param _percentile The percentile value (0-10000)
      * @param _ipfsHash The IPFS hash containing additional market data
+     
      * @return marketId The ID of the newly created market
      */
     function initializeMarket(
@@ -150,7 +174,7 @@ contract VPOP is Ownable {
         // Input validation
         require(_lowerBound < _upperBound, "Lower bound must be less than upper bound");
         require(_decimals <= 18, "Decimals must be <= 18");
-        require(_minWager > 0, "Minimum wager must be greater than 0");
+        require(_minWager >= 0, "Minimum wager must be greater than 0");
         require(_decayFactor <= 10000, "Decay factor must be <= 10000 (100%)");
         require(_commitDuration > 0, "Commit duration must be greater than 0");
         require(_revealDuration > 0, "Reveal duration must be greater than 0");
@@ -208,11 +232,13 @@ contract VPOP is Ownable {
      * @param marketId The ID of the market to commit to
      * @param commitmentHash The hash of the commitment (position, nonce, wager)
      * @param wager The wager of the commitment
+     * @param proof The Merkle proof for whitelist verification
      */
     function commit(
         uint256 marketId,
         bytes32 commitmentHash,
-        uint256 wager
+        uint256 wager,
+        bytes32[] calldata proof
     ) public payable {
         // Validate market exists and is active
         require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
@@ -225,65 +251,79 @@ contract VPOP is Ownable {
             "Commitment phase has ended"
         );
 
-        // Validate weight is greater than minimum wager
-        require(wager >= market.minWager, "Weight below minimum wager");
-       
-        // Calculate platform fee
-        uint256 platformFee = (wager * platformFeeRate) / 10000;
-        // Calculate creator fee
-        uint256 creatorFee = (wager * creatorFeeRate) / 10000;
-        // Calculate ape fee
-        uint256 apeFee = (wager * apeFeeRate) / 10000;
-        // Add to the pot 
-        uint256 winnings = wager - platformFee - creatorFee - apeFee;
-        marketConsensus[marketId].totalWinnings += winnings;
-        marketConsensus[marketId].totalWagers += wager;
+        // Validate wager is greater than minimum wager
+        require(wager >= market.minWager, "Wager below minimum wager");
 
-        // Check if the market uses native token or ERC20
-        if (market.token == address(0)) {
-            // For native token (ETH), ensure the sent value matches the wager
-            require(msg.value >= wager, "Wager must equal transferred amount");
-            // Transfer platform fee to platform owner
-            (bool platformSuccess, ) = owner().call{value: platformFee}("");
-            require(platformSuccess, "Platform fee transfer failed");
-            
-            // Transfer creator fee to market creator
-            (bool creatorSuccess, ) = market.creator.call{value: creatorFee}("");
-            require(creatorSuccess, "Creator fee transfer failed");
-
-            // Transfer ape fee to ape owner
-            (bool apeSuccess, ) = apeOwner.call{value: apeFee}("");
-            require(apeSuccess, "Ape fee transfer failed");
-
-        } else {
-            // Transfer ERC20 tokens from user to contract
-            IERC20 token = IERC20(market.token);
-            
-            // Transfer tokens from user to contract, platform, and creator
-            require(
-                token.transferFrom(msg.sender, address(this), wager),
-                "Token transfer failed - insufficient balance or allowance"
-            );
-
-            // Transfer fees to platform and creator from contract
-            require(
-                token.transfer(owner(), platformFee),
-                "Platform fee transfer failed"
-            );
-            require(
-                token.transfer(market.creator, creatorFee),
-                "Creator fee transfer failed"
-            );
-            require(
-                token.transfer(apeOwner, apeFee),
-                "Ape fee transfer failed"
-            );
+        
+        if (whitelistRoots[marketId] != bytes32(0)) {   
+            // whitelisted market      
+            require(whitelistCommits[marketId][msg.sender] == false, "Address already used in this market");
+            // require(verifyWhitelist(marketId, msg.sender, proof), "Address not whitelisted");
+            bool verified = MerkleProof.verify(proof, whitelistRoots[marketId], keccak256(abi.encodePacked(msg.sender)));
+            require(verified, "Address not whitelisted");
+            whitelistCommits[marketId][msg.sender] = true;
+            wager = 100000;
         }
+        else{
+            //normal market
+            // Calculate platform fee
+            uint256 platformFee = (wager * platformFeeRate) / 10000;
+            // Calculate creator fee
+            uint256 creatorFee = (wager * creatorFeeRate) / 10000;
+            // Calculate ape fee
+            uint256 apeFee = (wager * apeFeeRate) / 10000;
+            // Add to the pot 
+            uint256 winnings = wager - platformFee - creatorFee - apeFee;
+            marketConsensus[marketId].totalWinnings += winnings;
 
+            // Check if the market uses native token or ERC20
+            if (market.token == address(0)) {
+                // For native token (ETH), ensure the sent value matches the wager
+                require(msg.value >= wager, "Wager must equal transferred amount");
+                // Transfer platform fee to platform owner
+                (bool platformSuccess, ) = owner().call{value: platformFee}("");
+                require(platformSuccess, "Platform fee transfer failed");
+                
+                // Transfer creator fee to market creator
+                (bool creatorSuccess, ) = market.creator.call{value: creatorFee}("");
+                require(creatorSuccess, "Creator fee transfer failed");
+
+                // Transfer ape fee to ape owner
+                (bool apeSuccess, ) = apeOwner.call{value: apeFee}("");
+                require(apeSuccess, "Ape fee transfer failed");
+
+            } else {
+                // Transfer ERC20 tokens from user to contract
+                IERC20 token = IERC20(market.token);
+                
+                // Transfer tokens from user to contract, platform, and creator
+                require(
+                    token.transferFrom(msg.sender, address(this), wager),
+                    "Token transfer failed - insufficient balance or allowance"
+                );
+
+                // Transfer fees to platform and creator from contract
+                require(
+                    token.transfer(owner(), platformFee),
+                    "Platform fee transfer failed"
+                );
+                require(
+                    token.transfer(market.creator, creatorFee),
+                    "Creator fee transfer failed"
+                );
+                require(
+                    token.transfer(apeOwner, apeFee),
+                    "Ape fee transfer failed"
+                );
+            }
+        }
+        marketConsensus[marketId].totalWagers += wager;
         // Calculate weight
         // uint256 weight = wager * (10000 - market.decayFactor) * ((block.timestamp - market.createdAt)*10000 / market.commitDuration) / 100;
         uint256 weight = wager - (wager * market.decayFactor * ((block.timestamp - market.createdAt) * 10000 / market.commitDuration) / 10000 / 10000);
-        
+        if(weight <= 0){
+            weight = 1;
+        }
         // Increment total commitments counter
         marketConsensus[marketId].totalCommitments++;
         // Get the next commitment ID
@@ -300,8 +340,6 @@ contract VPOP is Ownable {
             nonce: 0,    // Will be set during reveal
             claimed: false
         });
-
-        
 
         emit CommitmentCreated(
             marketId,
@@ -334,7 +372,8 @@ contract VPOP is Ownable {
         require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
         
         Market storage market = markets[marketId];
-        
+        require(position >= market.lowerBound && position <= market.upperBound, "Position out of bounds");
+
         // Validate reveal phase is active
         require(
             block.timestamp > market.createdAt + market.commitDuration &&
@@ -462,7 +501,7 @@ contract VPOP is Ownable {
         require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
         MarketConsensus storage consensus = marketConsensus[marketId];
         require(consensus.resolved, "Market not resolved");
-
+        require(consensus.totalWinnings > 0, "No winnings to claim... yet");
         // Get the commitment
         Commitment storage commitment = commitments[marketId][commitmentId];
         require(commitment.revealed, "Commitment not revealed");
@@ -493,7 +532,65 @@ contract VPOP is Ownable {
         emit WinningsClaimed(marketId, msg.sender, commitmentId, winnings);
     }
     
+    //==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==
+    //==//==//==//==//==//== public helper functions //==//==//==//==//==//==
+    //==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==
+    /**
+     * @dev Verifies if an address is whitelisted for a market
+     * @param marketId The ID of the market
+     * @param account The address to verify
+     * @param proof The Merkle proof for the address
+     * @return bool True if the address is whitelisted
+     */
+    // function verifyWhitelist(
+    //     uint256 marketId,
+    //     address account,
+    //     bytes32[] calldata proof
+    // ) public view returns (bool) {
+    //     bytes32 whitelistRoot = whitelistRoots[marketId];
+        
+    //     // Create leaf node
+    //     bytes32 leaf = keccak256(abi.encodePacked(account));
+        
+    //     // Verify Merkle proof
+    //     bytes32 computedHash = leaf;
+    //     for (uint256 i = 0; i < proof.length; i++) {
+    //         bytes32 proofElement = proof[i];
+    //         if (computedHash <= proofElement) {
+    //             // Hash(current computed hash + current element of the proof)
+    //             computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
+    //         } else {
+    //             // Hash(current element of the proof + current computed hash)
+    //             computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
+    //         }
+    //     }
+        
+    //     // Check if the computed hash (root) is equal to the provided root
+    //     return computedHash == whitelistRoot;
+    // }
 
+    // function verify(
+    //     bytes32[] memory proof,
+    //     bytes32 root,
+    //     bytes32 leaf,
+    //     uint256 index
+    // ) public pure returns (bool) {
+    //     bytes32 hash = leaf;
+
+    //     for (uint256 i = 0; i < proof.length; i++) {
+    //         bytes32 proofElement = proof[i];
+
+    //         if (index % 2 == 0) {
+    //             hash = keccak256(abi.encodePacked(hash, proofElement));
+    //         } else {
+    //             hash = keccak256(abi.encodePacked(proofElement, hash));
+    //         }
+
+    //         index = index / 2;
+    //     }
+
+    //     return hash == root;
+    // }
 
     /**
      * @dev Returns whether a position is a winning position
