@@ -1130,6 +1130,11 @@ describe("VPOP", function () {
       // Reveal commitment
       await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
 
+      // Verify commitment was revealed
+      const commitment = await vpop.commitments(marketId, 1);
+      expect(commitment.revealed).to.be.true;
+      expect(commitment.position).to.equal(position);
+
       // Move to resolution phase
       await time.increase(3601);
 
@@ -1149,10 +1154,11 @@ describe("VPOP", function () {
       const TestToken = await ethers.getContractFactory("TestToken");
       const testToken = await TestToken.deploy();
       await testToken.waitForDeployment();
-
+      const tokenAddress = await testToken.getAddress();
+      
       // Create market with test token and zero minWager
       await vpop.initializeMarket(
-        await testToken.getAddress(),
+        tokenAddress,
         1000n,
         10000n,
         2,
@@ -1174,22 +1180,27 @@ describe("VPOP", function () {
       await testToken.mint(owner.address, firstPrizeAmount + secondPrizeAmount);
       await testToken.approve(await vpop.getAddress(), firstPrizeAmount + secondPrizeAmount);
       
-      await vpop.addWinnings(marketId, firstPrizeAmount, { value: firstPrizeAmount });
+      await vpop.addWinnings(marketId, firstPrizeAmount, { value: 0 });
       let marketConsensus = await vpop.marketConsensus(marketId);
       expect(marketConsensus.totalWinnings).to.equal(firstPrizeAmount);
 
       // Second funding by other account
       await testToken.mint(otherAccount.address, secondPrizeAmount);
       await testToken.connect(otherAccount).approve(await vpop.getAddress(), secondPrizeAmount);
-      await vpop.connect(otherAccount).addWinnings(marketId, secondPrizeAmount, { value: secondPrizeAmount });
+      await vpop.connect(otherAccount).addWinnings(marketId, secondPrizeAmount, { value: 0 });
       marketConsensus = await vpop.marketConsensus(marketId);
       expect(marketConsensus.totalWinnings).to.equal(firstPrizeAmount + secondPrizeAmount);
 
-      // Try to fund with incorrect value
+      // Try to fund with more tokens than approved
+      await testToken.mint(thirdAccount.address, ethers.parseEther("1.0"));
+      await testToken.connect(thirdAccount).approve(await vpop.getAddress(), ethers.parseEther("0.5")); // Only approve half
       await expect(
-        vpop.connect(thirdAccount).addWinnings(marketId, ethers.parseEther("1.0"), { value: ethers.parseEther("0.5") })
-      ).to.be.revertedWith("Sent value must match additional winnings");
+        vpop.connect(thirdAccount).addWinnings(marketId, ethers.parseEther("1.0"), { value: 0 })
+      ).to.be.reverted;
 
+      // Check contract's token balance
+      const contractBalance = await testToken.balanceOf(await vpop.getAddress());
+      expect(contractBalance).to.equal(firstPrizeAmount + secondPrizeAmount);
       // Create commitment parameters
       const position = 5000n;
       const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
@@ -1211,12 +1222,17 @@ describe("VPOP", function () {
       // Resolve market
       await vpop.resolve(marketId);
 
+      // Get balance before claim
+      const balanceBefore = await testToken.balanceOf(owner.address);
+      
       // Claim winnings
       await vpop.claim(marketId, 1);
 
-      // Verify winnings were claimed
-      const finalBalance = await testToken.balanceOf(owner.address);
-      expect(finalBalance).to.equal(firstPrizeAmount + secondPrizeAmount);
+      const totalWinnings = await vpop.marketConsensus(marketId);
+      
+      // Get balance after claim and verify the difference
+      const balanceAfter = await testToken.balanceOf(owner.address);
+      expect(balanceAfter - balanceBefore).to.equal(firstPrizeAmount + secondPrizeAmount);
     });
   });
 });

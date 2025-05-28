@@ -46,6 +46,8 @@ contract VPOP is Ownable {
         // Resolution data
         uint256 winningThreshold;
         uint256 consensusPosition;
+        uint256 winningWagers; // Sum of wagers for winning positions
+        uint256 winningCommitments; // Count of winning positions
     }
 
     struct Commitment {
@@ -209,7 +211,9 @@ contract VPOP is Ownable {
             totalCommitments: 0,
             revealedCommitments: 0,
             winningThreshold: 0,
-            consensusPosition: 0
+            consensusPosition: 0,
+            winningWagers: 0,
+            winningCommitments: 0
         });
 
         // Store the market in the mapping
@@ -445,8 +449,7 @@ contract VPOP is Ownable {
 
         // Collect all revealed positions and calculate distances
         for (uint32 i = 0; i < consensus.totalCommitments; i++) {
-            Commitment storage commitment = commitments[marketId][i];
-            
+            Commitment storage commitment = commitments[marketId][i+1];
             if (commitment.revealed) {
                 positions[distanceIndex] = commitment.position;
                 // Calculate absolute distance from consensus
@@ -487,6 +490,22 @@ contract VPOP is Ownable {
         else{
             consensus.winningThreshold = 0;
         }
+
+        // Calculate total winning wagers and winning commitments
+        for (uint32 i = 0; i < consensus.totalCommitments; i++) {
+            Commitment storage commitment = commitments[marketId][i+1];
+            
+            if (commitment.revealed) {
+                uint256 distance = commitment.position > consensus.consensusPosition ? 
+                    commitment.position - consensus.consensusPosition : 
+                    consensus.consensusPosition - commitment.position;
+                if (distance <= consensus.winningThreshold) {
+                    consensus.winningWagers += commitment.wager;
+                    consensus.winningCommitments++;
+                }
+            }
+        }
+
         // Mark market as resolved
         consensus.resolved = true;
     }
@@ -513,14 +532,24 @@ contract VPOP is Ownable {
             consensus.consensusPosition - commitment.position;
         require(distance <= consensus.winningThreshold, "Not a winning position");
 
+        Market storage market = markets[marketId];
+
         // Calculate winnings based on proportion of total winning wagers
-        uint256 winnings = (commitment.wager * consensus.totalWinnings) / consensus.totalWagers;
+        uint256 winnings = 0;
+        if(market.minWager > 0){
+            // Calculate winnings based on proportion of total winning wagers
+            winnings = (commitment.wager * consensus.totalWinnings) / consensus.winningWagers;
+        }
+        else{
+            winnings = consensus.totalWinnings / consensus.winningCommitments;
+        }
+        
 
         // Mark as claimed
         commitment.claimed = true;
 
         // Transfer winnings
-        Market storage market = markets[marketId];
+        
         if (market.token == address(0)) {
             (bool success, ) = msg.sender.call{value: winnings}("");
             require(success, "Transfer failed");
