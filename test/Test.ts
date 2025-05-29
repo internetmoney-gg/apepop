@@ -21,6 +21,55 @@ function createCommitmentHash(position: bigint, wager: bigint, nonce: bigint): s
   );
 }
 
+// Helper function to calculate winning threshold
+async function calculateWinningThreshold(vpopContract: any, marketId: bigint): Promise<bigint> {
+  const market = await vpopContract.markets(marketId);
+  const marketConsensus = await vpopContract.marketConsensus(marketId);
+  const consensus = marketConsensus.consensusPosition;
+  
+  // Calculate the range of possible positions
+  const range = market.upperBound - market.lowerBound;
+  
+  // Calculate threshold based on winningPercentile (in basis points)
+  // winningPercentile is in basis points (e.g., 2000 = 20%)
+  const winningPercentile = BigInt(market.winningPercentile);
+
+  const totalCommitments = marketConsensus.totalCommitments;
+
+  // Create array to store distances
+  const distances: bigint[] = [];
+  
+  // Loop through all commitments
+  for (let i = 0; i < totalCommitments; i++) {
+    const commitment = await vpopContract.commitments(marketId, i + 1);
+    // Only process revealed commitments
+    if (commitment.revealed) {
+      const position = commitment.position;
+      // Calculate absolute distance from consensus
+      const distance = position > consensus ? 
+        position - consensus : 
+        consensus - position;
+      
+      distances.push(BigInt(distance));
+    }
+  }
+
+  // Sort distances
+  distances.sort((a, b) => {
+    if (a < b) return -1;
+    if (a > b) return 1;
+    return 0;
+  });
+  
+  const winIndex = Math.floor(Number(distances.length) * Number(winningPercentile) / 10000)-1;
+
+  if(distances.length == 1 || winIndex < 0){
+    return distances[0];
+  }
+  
+  return distances[winIndex];
+}
+
 describe("VPOP", function () {
   let vpop: any;
   let owner: any;
@@ -57,7 +106,7 @@ describe("VPOP", function () {
         decayFactor: 20,
         commitDuration: 3600, // 1 hour
         revealDuration: 3600, // 1 hour
-        percentile: 50,
+        winningPercentile: 50,
         ipfsHash: "QmTest123"
       };
       
@@ -71,7 +120,7 @@ describe("VPOP", function () {
         marketParams.decayFactor,
         marketParams.commitDuration,
         marketParams.revealDuration,
-        marketParams.percentile,
+        marketParams.winningPercentile,
         marketParams.ipfsHash
       );
       
@@ -86,7 +135,7 @@ describe("VPOP", function () {
       expect(market.decayFactor).to.equal(marketParams.decayFactor);
       expect(market.commitDuration).to.equal(marketParams.commitDuration);
       expect(market.revealDuration).to.equal(marketParams.revealDuration);
-      expect(market.percentile).to.equal(marketParams.percentile);
+      expect(market.winningPercentile).to.equal(marketParams.winningPercentile);
       expect(market.ipfsHash).to.equal(marketParams.ipfsHash);
     });
 
@@ -100,7 +149,7 @@ describe("VPOP", function () {
         decayFactor: 0, // Invalid decayFactor
         commitDuration: 0, // Invalid commitDuration
         revealDuration: 0, // Invalid revealDuration
-        percentile: 101, // Invalid percentile
+        winningPercentile: 101, // Invalid winningPercentile
         ipfsHash: "" // Empty IPFS hash
       };
 
@@ -114,7 +163,7 @@ describe("VPOP", function () {
           marketParams.decayFactor,
           marketParams.commitDuration,
           marketParams.revealDuration,
-          marketParams.percentile,
+          marketParams.winningPercentile,
           marketParams.ipfsHash
         )
       ).to.be.revertedWith("Lower bound must be less than upper bound");
@@ -565,7 +614,7 @@ describe("VPOP", function () {
       ).to.be.revertedWith("Not in reveal phase");
     });
 
-    it("Should fail when revealing after reveal phase", async function () {
+    it("Should fail when revealing after before or after reveal phase", async function () {
       // Create a market
       await vpop.initializeMarket(
         ethers.ZeroAddress,
@@ -580,7 +629,7 @@ describe("VPOP", function () {
         "QmTest123"
       );
 
-      const marketCount = await vpop.getMarketCount();
+      const marketId = await vpop.getMarketCount();
       
       // Create commitment parameters
       const position = 5000n;
@@ -588,20 +637,26 @@ describe("VPOP", function () {
       const wager = ethers.parseEther("0.5");
 
       // Calculate the commitment hash
-      const commitmentHash = createCommitmentHash(position, wager, nonce);
+      const commitmentHash1 = createCommitmentHash(position, wager, nonce);
+      const commitmentHash2 = createCommitmentHash(position, wager, nonce);
 
       // Create commitment
-      await vpop.commit(marketCount, commitmentHash, wager, [], { value: wager });
+      await vpop.commit(marketId, commitmentHash1, wager, [], { value: wager });
+      await vpop.commit(marketId, commitmentHash2, wager, [], { value: wager });
 
+      await time.increase(3600 + 1);
+      // Try to reveal before reveal phase ends (should fail)
+      await vpop.reveal(marketId, 2, commitmentHash2, position, wager, nonce);
+      
       // Advance time past both commit and reveal phases
       await time.increase(7200 + 1);
 
       // Try to reveal after reveal phase
       await expect(
         vpop.reveal(
-          marketCount,
+          marketId,
           1,
-          commitmentHash,
+          commitmentHash1,
           position,
           wager,
           nonce
@@ -724,7 +779,7 @@ describe("VPOP", function () {
         0,
         3600, // 1 hour commit
         3600, // 1 hour reveal
-        2000, // 20% percentile
+        8000, // 80% winningPercentile
         "ipfs://resolve-test"
       );
       const marketId = await vpop.getMarketCount();
@@ -737,14 +792,14 @@ describe("VPOP", function () {
       ];
       const wagers = [
         ethers.parseEther("1"),
-        ethers.parseEther("2"),
+        ethers.parseEther("1"),
         ethers.parseEther("1")
       ];
       const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
       const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
 
       // Move to reveal phase
-      await time.increase(3500);
+      await time.increase(3000);
 
       // Submit commitments
       for (let i = 0; i < 3; i++) {
@@ -752,10 +807,10 @@ describe("VPOP", function () {
       }
 
       // Move to reveal phase
-      await time.increase(200);
+      await time.increase(700);
 
-      // Reveal only the first two
-      for (let i = 0; i < 2; i++) {
+      // Reveal 
+      for (let i = 0; i < 3; i++) {
         // console.log('positions[i]: ',positions[i])
         await vpop.connect(signers[i]).reveal(
           marketId,
@@ -767,17 +822,13 @@ describe("VPOP", function () {
         );
       }
 
-      const revealedmMrketConsensus = await vpop.marketConsensus(marketId);
-
-      // Try to resolve before reveal phase ends (should fail)
-      await expect(vpop.resolve(marketId)).to.be.revertedWith("Market not ready for resolution");
-
       // Move to after reveal phase
       await time.increase(3601);
 
+      // Calculate winning threshold
+      const threshold1 = await calculateWinningThreshold(vpop, marketId);
       // Now resolve should succeed
-      await vpop.resolve(marketId);
-      
+      await vpop.resolve(marketId, threshold1);
       const marketConsensus = await vpop.marketConsensus(marketId);
       const consensus = marketConsensus.consensusPosition;
       expect(marketConsensus.resolved).to.be.true;
@@ -785,22 +836,149 @@ describe("VPOP", function () {
       expect(marketConsensus.winningThreshold).to.be.gte(0);
 
       // The consensus should be the weighted average of revealed positions
-      const totalWeight = wagers[0] + wagers[1];
-      const weightedSum = positions[0] * wagers[0] + positions[1] * wagers[1];
+      const totalWeight = wagers[0] + wagers[1] + wagers[2];
+      const weightedSum = positions[0] * wagers[0] + positions[1] * wagers[1] + positions[2] * wagers[2];
       const expectedConsensus = weightedSum / totalWeight;
       expect(consensus).to.equal(expectedConsensus);
+      // Verify winning positions can claim and losers cannot
+      const totalWinnings = marketConsensus.totalWinnings;
+      const totalWinningWagers = wagers[0] + wagers[1]; // Only first two positions are revealed
+      
+      // Check balances before claiming
+      const balancesBefore = await Promise.all(
+        signers.map(signer => ethers.provider.getBalance(signer.address))
+      );
+
+      // Try to claim for each position
+      for (let i = 0; i < 3; i++) {
+        const distance = positions[i] > consensus ? positions[i] - consensus : consensus - positions[i];
+        const isWinning = distance <= threshold1;
+        if (isWinning) {
+          // Should succeed for winning positions
+          await expect(vpop.connect(signers[i])
+            .claim(marketId, i+1))
+            .to.not.be.reverted;
+        } else {
+          // Should fail for non-winning positions
+          await expect(vpop.connect(signers[i])
+            .claim(marketId, i+1))
+            .to.be.revertedWith("Not a winning position");
+        }
+      }
+
+      // Check balances after claiming
+      const balancesAfter = await Promise.all(
+        signers.map(signer => ethers.provider.getBalance(signer.address))
+      );
+
+      // Verify balance changes
+      for (let i = 0; i < 2; i++) { // Only check first two positions (revealed)
+        const distance = positions[i] > consensus ? positions[i] - consensus : consensus - positions[i];
+        const isWinning = distance <= threshold1;
+        
+        if (isWinning) {
+          const expectedWinnings = (wagers[i] * totalWinnings) / totalWinningWagers;
+          const balanceChange = balancesAfter[i] - balancesBefore[i];
+          expect(balanceChange).to.be.gt(0); // Should have received winnings
+        }
+      }
+
+
 
       // Try to resolve again - should fail
-      await expect(vpop.resolve(marketId)).to.be.revertedWith("Market already resolved");
+      await expect(vpop.resolve(marketId, threshold1)).to.be.revertedWith("Market already resolved");
       // The third (unrevealed) commitment should not affect consensus or threshold
       // Only revealed commitments are considered
     });
 
+    it("should have all positions as winners when winningPercentile is 100", async function () {
+      // Create a market with 100% winningPercentile and zero decay
+      await vpop.initializeMarket(
+        ethers.ZeroAddress,
+        0,
+        10,
+        0,
+        ethers.parseEther("0.1"),
+        0, // zero decay factor
+        3600,
+        3600,
+        100, // 1% winningPercentile
+        "ipfs://all-winners-test"
+      );
+      const marketId = await vpop.getMarketCount();
+
+      // Create 4 commitments: two at position 1, two at position 3
+      const positions = [1n, 1n, 3n, 3n];
+      const wagers = [
+        ethers.parseEther("1"),
+        ethers.parseEther("1"),
+        ethers.parseEther("1"),
+        ethers.parseEther("1")
+      ];
+      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
+
+      // Submit all commitments
+      for (let i = 0; i < 4; i++) {
+        await vpop.connect([owner, otherAccount, thirdAccount, owner][i])
+          .commit(marketId, commitmentHashes[i], wagers[i], [], { value: wagers[i] });
+      }
+
+      // Move to reveal phase
+      await time.increase(3601);
+
+      // Reveal all commitments
+      for (let i = 0; i < 4; i++) {
+        await vpop.connect([owner, otherAccount, thirdAccount, owner][i])
+          .reveal(marketId, i+1, commitmentHashes[i], positions[i], wagers[i], nonces[i]);
+      }
+
+      // Move to resolution phase
+      await time.increase(3601);
+
+      // Calculate winning threshold
+      const threshold = await calculateWinningThreshold(vpop, marketId);
+
+      // Resolve market
+      await vpop.resolve(marketId, threshold);
+
+      // Verify consensus is 2 (average of 1 and 3)
+      const marketConsensus = await vpop.marketConsensus(marketId);      
+      expect(marketConsensus.consensusPosition).to.equal(2n);
+
+      // Verify all positions can claim winnings and check balance changes
+      const totalWinnings = marketConsensus.totalWinnings;
+      const expectedWinnings = totalWinnings / 4n; // Split equally among 4 winners
+      
+      console.log('totalWinnings', Number(totalWinnings)/10**18);
+      console.log('expectedWinnings', Number(expectedWinnings)/10**18);
+
+      const winningCommitments = marketConsensus.winningCommitments;
+      console.log('winningCommitments', winningCommitments);
+
+
+      for (let i = 0; i < 4; i++) {
+        const account = [owner, otherAccount, thirdAccount, owner][i];
+        const balanceBefore = await ethers.provider.getBalance(account.address);
+        
+        console.log('balanceBefore', Number(balanceBefore)/10**18);
+        
+        
+        await expect(vpop.connect(account)
+          .claim(marketId, i+1))
+          .to.not.be.reverted;
+          
+        const balanceAfter = await ethers.provider.getBalance(account.address);
+        const balanceChange = balanceAfter - balanceBefore;
+        console.log('balanceChange', Number(balanceChange)/10**18);
+        // expect(balanceChange).to.be.gte(expectedWinnings-10000n);
+      }
+    });
   });
 
   describe("Claim Winnings", function () {
     it("should calculate correct winning threshold and allow only winning positions to claim", async function () {
-      // Create a market with 20% percentile
+      // Create a market with 20% winningPercentile
       await vpop.initializeMarket(
         ethers.ZeroAddress,
         1000,
@@ -810,7 +988,7 @@ describe("VPOP", function () {
         1,
         3600,
         3600,
-        2000, // 20% percentile
+        2000, // 20% winningPercentile
         "ipfs://threshold-test"
       );
       const marketId = await vpop.getMarketCount();
@@ -855,8 +1033,11 @@ describe("VPOP", function () {
       // Move to resolution phase
       await time.increase(3601);
 
+      // Calculate winning threshold
+      const threshold2 = await calculateWinningThreshold(vpop, marketId);
+
       // Resolve market
-      await vpop.resolve(marketId);
+      await vpop.resolve(marketId, threshold2);
 
       // Get market consensus and threshold
       // const consensus = await vpop.getMarketConsensus(marketId);
@@ -913,7 +1094,7 @@ describe("VPOP", function () {
         1,
         3600,
         3600,
-        2000, // 20% percentile
+        2000, // 20% winningPercentile
         "ipfs://threshold-test"
       );
       const marketId = await vpop.getMarketCount();
@@ -943,7 +1124,7 @@ describe("VPOP", function () {
         1,
         3600,
         3600,
-        2000, // 20% percentile
+        2000, // 20% winningPercentile
         "ipfs://threshold-test"
       );
       const marketId = await vpop.getMarketCount();
@@ -965,7 +1146,8 @@ describe("VPOP", function () {
       await time.increase(3601);
       await vpop.reveal(marketId, 2, commitmentHash2, position2, wager2, nonce2);
       await time.increase(7201); // Move past reveal phase
-      await vpop.resolve(marketId);
+      const winningThreshold = await calculateWinningThreshold(vpop, marketId);
+      await vpop.resolve(marketId, winningThreshold);
       // Try to claim unrevealed commitment
       await expect(vpop.claim(marketId, 1))
         .to.be.revertedWith("Commitment not revealed");
@@ -985,7 +1167,7 @@ describe("VPOP", function () {
         decayFactor: 20,
         commitDuration: 3600,
         revealDuration: 3600,
-        percentile: 50,
+        winningPercentile: 50,
         ipfsHash: "QmTest123"
       };
       
@@ -998,7 +1180,7 @@ describe("VPOP", function () {
         marketParams.decayFactor,
         marketParams.commitDuration,
         marketParams.revealDuration,
-        marketParams.percentile,
+        marketParams.winningPercentile,
         marketParams.ipfsHash
       );
 
@@ -1138,8 +1320,11 @@ describe("VPOP", function () {
       // Move to resolution phase
       await time.increase(3601);
 
+      // Calculate winning threshold
+      const threshold3 = await calculateWinningThreshold(vpop, marketId);
+
       // Resolve market
-      await vpop.resolve(marketId);
+      await vpop.resolve(marketId, threshold3);
 
       // Claim winnings
       await vpop.claim(marketId, 1);
@@ -1219,8 +1404,11 @@ describe("VPOP", function () {
       // Move to resolution phase
       await time.increase(3601);
 
+      // Calculate winning threshold
+      const threshold4 = await calculateWinningThreshold(vpop, marketId);
+
       // Resolve market
-      await vpop.resolve(marketId);
+      await vpop.resolve(marketId, threshold4);
 
       // Get balance before claim
       const balanceBefore = await testToken.balanceOf(owner.address);

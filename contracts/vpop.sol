@@ -28,7 +28,7 @@ contract VPOP is Ownable {
         uint256 decayFactor;
         uint256 commitDuration;
         uint256 revealDuration;
-        uint16 percentile;
+        uint16 winningPercentile;
         string ipfsHash;
     }
 
@@ -51,6 +51,7 @@ contract VPOP is Ownable {
     }
 
     struct Commitment {
+        address owner;
         bytes32 commitmentHash;
         uint256 wager;
         uint256 weight;
@@ -80,7 +81,7 @@ contract VPOP is Ownable {
         address token,
         uint256 lowerBound,
         uint256 upperBound,
-        uint16 percentile
+        uint16 winningPercentile
     );
 
     event CommitmentCreated(
@@ -156,7 +157,7 @@ contract VPOP is Ownable {
      * @param _decayFactor The decay factor for the market
      * @param _commitDuration The duration of the commit phase in seconds
      * @param _revealDuration The duration of the reveal phase in seconds
-     * @param _percentile The percentile value (0-10000)
+     * @param _winningPercentile The winningPercentile value (0-10000)
      * @param _ipfsHash The IPFS hash containing additional market data
      
      * @return marketId The ID of the newly created market
@@ -170,7 +171,7 @@ contract VPOP is Ownable {
         uint16 _decayFactor,
         uint256 _commitDuration,
         uint256 _revealDuration,
-        uint16 _percentile,
+        uint16 _winningPercentile,
         string memory _ipfsHash
     ) public returns (uint256 marketId) {
         // Input validation
@@ -180,7 +181,7 @@ contract VPOP is Ownable {
         require(_decayFactor <= 10000, "Decay factor must be <= 10000 (100%)");
         require(_commitDuration > 0, "Commit duration must be greater than 0");
         require(_revealDuration > 0, "Reveal duration must be greater than 0");
-        require(_percentile <= 10000, "Percentile must be <= 10000 (100%)");
+        require(_winningPercentile <= 10000, "Winning Percentile must be <= 10000 (100%)");
         require(bytes(_ipfsHash).length > 0, "IPFS hash cannot be empty");
 
         // Get the next market ID and increment the counter
@@ -198,7 +199,7 @@ contract VPOP is Ownable {
             decayFactor: _decayFactor,
             commitDuration: _commitDuration,
             revealDuration: _revealDuration,
-            percentile: _percentile,
+            winningPercentile: _winningPercentile,
             ipfsHash: _ipfsHash
         });
 
@@ -225,7 +226,7 @@ contract VPOP is Ownable {
             _token,
             _lowerBound,
             _upperBound,
-            _percentile
+            _winningPercentile
         );
         
         return marketId;
@@ -257,7 +258,6 @@ contract VPOP is Ownable {
 
         // Validate wager is greater than minimum wager
         require(wager >= market.minWager, "Wager below minimum wager");
-
         
         if (whitelistRoots[marketId] != bytes32(0)) {   
             // whitelisted market      
@@ -335,6 +335,7 @@ contract VPOP is Ownable {
         
         // Store the commitment
         commitments[marketId][commitmentId] = Commitment({
+            owner: msg.sender,
             commitmentHash: commitmentHash,
             wager: wager,
             weight: weight,
@@ -423,7 +424,7 @@ contract VPOP is Ownable {
      * @dev Resolves a market after checking reveal status
      * @param marketId The ID of the market to resolve
      */
-    function resolve(uint256 marketId) external {
+    function resolve(uint256 marketId, uint256 proposedWinningThreshold) external {
         // Validate market exists
         require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
         
@@ -441,73 +442,61 @@ contract VPOP is Ownable {
         // Calculate market consensus
         require(consensus.totalWeight > 0, "No commitments to resolve");
         consensus.consensusPosition = consensus.weightedSum / consensus.totalWeight;
+        // console.log("marketId: ", marketId);
 
         // Calculate distances from consensus for each revealed commitment
         uint256[] memory distances = new uint256[](consensus.revealedCommitments);
-        uint256[] memory positions = new uint256[](consensus.revealedCommitments);
         uint256 distanceIndex = 0;
-
+        uint256 dupsAtThreshold = 0;
         // Collect all revealed positions and calculate distances
         for (uint32 i = 0; i < consensus.totalCommitments; i++) {
             Commitment storage commitment = commitments[marketId][i+1];
             if (commitment.revealed) {
-                positions[distanceIndex] = commitment.position;
+                // positions[distanceIndex] = commitment.position;
                 // Calculate absolute distance from consensus
                 distances[distanceIndex] = commitment.position > consensus.consensusPosition ? 
                     commitment.position - consensus.consensusPosition : 
                     consensus.consensusPosition - commitment.position;
-                distanceIndex++;
-            }
-        }
-
-        if(distanceIndex > 0){
-            // Sort distances and positions (bubble sort for simplicity)
-            for (uint32 i = 0; i < distanceIndex - 1; i++) {
-                for (uint32 j = 0; j < distanceIndex - i - 1; j++) {
-                    if (distances[j] > distances[j + 1]) {
-                        // Swap distances
-                        uint256 tempDist = distances[j];
-                        distances[j] = distances[j + 1];
-                        distances[j + 1] = tempDist;
-                        
-                        // Swap positions
-                        uint256 tempPos = positions[j];
-                        positions[j] = positions[j + 1];
-                        positions[j + 1] = tempPos;
-                    }
+                
+                if(distances[distanceIndex] == proposedWinningThreshold){
+                    dupsAtThreshold++;
                 }
-            }
-        }
-        // Calculate winning threshold based on percentile
-        // If percentile is 1000 (10%), we take the distance of the 10% closest commitment
-        if(distances.length > 1){
-            uint256 winningIndex = (distanceIndex * market.percentile) / 10000;
-            if (winningIndex >= distanceIndex) {
-                winningIndex = distanceIndex - 1;
-            }
-            consensus.winningThreshold = distances[winningIndex];
-        }
-        else{
-            consensus.winningThreshold = 0;
-        }
-
-        // Calculate total winning wagers and winning commitments
-        for (uint32 i = 0; i < consensus.totalCommitments; i++) {
-            Commitment storage commitment = commitments[marketId][i+1];
-            
-            if (commitment.revealed) {
-                uint256 distance = commitment.position > consensus.consensusPosition ? 
-                    commitment.position - consensus.consensusPosition : 
-                    consensus.consensusPosition - commitment.position;
-                if (distance <= consensus.winningThreshold) {
+                // console.log('xxxxx');
+                // console.log('distances[distanceIndex]', distances[distanceIndex]);
+                // console.log('proposedWinningThreshold', proposedWinningThreshold);
+                // Check if the commitment is a winning commitment, given the proposed winning threshold
+                if(distances[distanceIndex] <= proposedWinningThreshold){
                     consensus.winningWagers += commitment.wager;
                     consensus.winningCommitments++;
                 }
+                distanceIndex++;
             }
         }
+        // console.log('000000000');
+        // console.log('consensus.revealedCommitments', consensus.revealedCommitments);
+        // console.log('consensus.totalCommitments', consensus.totalCommitments);
+        // console.log('market.winningPercentile', market.winningPercentile);
+        // console.log('dupsAtThreshold', dupsAtThreshold);
+        // console.log('((consensus.totalCommitments * market.winningPercentile) / 10000): ',((consensus.totalCommitments * market.winningPercentile) / 10000));
+        // Calculate expected winning commitments based on winningPercentile
+        uint256 expectedWinningCommitments = ((consensus.totalCommitments * market.winningPercentile) / 10000);
+        // Ensure we have at least one winning commitment
+        if (expectedWinningCommitments == 0 && consensus.totalCommitments > 0) {
+            expectedWinningCommitments = 1;
+        }
+        expectedWinningCommitments += (dupsAtThreshold-1);
+        // console.log('expectedWinningCommitments', expectedWinningCommitments);
+        // console.log('consensus.winningCommitments', consensus.winningCommitments);
+        // Verify that the number of winning commitments matches our expected number
+        require(
+            consensus.winningCommitments == expectedWinningCommitments,
+            "Invalid number of winning commitments"
+        );
 
+        consensus.winningThreshold = proposedWinningThreshold;
         // Mark market as resolved
         consensus.resolved = true;
+
     }
 
     /**
@@ -534,7 +523,10 @@ contract VPOP is Ownable {
 
         Market storage market = markets[marketId];
 
-        // Calculate winnings based on proportion of total winning wagers
+        // console.log('INNNN the contract');
+        // console.log('commitment.wager', commitment.wager);
+        // console.log('consensus.totalWinnings', consensus.totalWinnings);
+        // console.log('consensus.winningWagers', consensus.winningWagers);
         uint256 winnings = 0;
         if(market.minWager > 0){
             // Calculate winnings based on proportion of total winning wagers
@@ -543,83 +535,28 @@ contract VPOP is Ownable {
         else{
             winnings = consensus.totalWinnings / consensus.winningCommitments;
         }
-        
+        console.log('contract winnings', winnings);
+        // console.log('consensus.totalWinnings', consensus.totalWinnings);
+        // console.log('consensus.winningWagers', consensus.winningWagers);
 
         // Mark as claimed
         commitment.claimed = true;
 
         // Transfer winnings
-        
         if (market.token == address(0)) {
-            (bool success, ) = msg.sender.call{value: winnings}("");
+            (bool success, ) = payable(commitment.owner).call{value: winnings}("");
             require(success, "Transfer failed");
         } else {
             IERC20 token = IERC20(market.token);
-            require(token.transfer(msg.sender, winnings), "Token transfer failed");
+            require(token.transfer(commitment.owner, winnings), "Token transfer failed");
         }
-
+        
         emit WinningsClaimed(marketId, msg.sender, commitmentId, winnings);
     }
     
     //==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==
     //==//==//==//==//==//== public helper functions //==//==//==//==//==//==
     //==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==
-    /**
-     * @dev Verifies if an address is whitelisted for a market
-     * @param marketId The ID of the market
-     * @param account The address to verify
-     * @param proof The Merkle proof for the address
-     * @return bool True if the address is whitelisted
-     */
-    // function verifyWhitelist(
-    //     uint256 marketId,
-    //     address account,
-    //     bytes32[] calldata proof
-    // ) public view returns (bool) {
-    //     bytes32 whitelistRoot = whitelistRoots[marketId];
-        
-    //     // Create leaf node
-    //     bytes32 leaf = keccak256(abi.encodePacked(account));
-        
-    //     // Verify Merkle proof
-    //     bytes32 computedHash = leaf;
-    //     for (uint256 i = 0; i < proof.length; i++) {
-    //         bytes32 proofElement = proof[i];
-    //         if (computedHash <= proofElement) {
-    //             // Hash(current computed hash + current element of the proof)
-    //             computedHash = keccak256(abi.encodePacked(computedHash, proofElement));
-    //         } else {
-    //             // Hash(current element of the proof + current computed hash)
-    //             computedHash = keccak256(abi.encodePacked(proofElement, computedHash));
-    //         }
-    //     }
-        
-    //     // Check if the computed hash (root) is equal to the provided root
-    //     return computedHash == whitelistRoot;
-    // }
-
-    // function verify(
-    //     bytes32[] memory proof,
-    //     bytes32 root,
-    //     bytes32 leaf,
-    //     uint256 index
-    // ) public pure returns (bool) {
-    //     bytes32 hash = leaf;
-
-    //     for (uint256 i = 0; i < proof.length; i++) {
-    //         bytes32 proofElement = proof[i];
-
-    //         if (index % 2 == 0) {
-    //             hash = keccak256(abi.encodePacked(hash, proofElement));
-    //         } else {
-    //             hash = keccak256(abi.encodePacked(proofElement, hash));
-    //         }
-
-    //         index = index / 2;
-    //     }
-
-    //     return hash == root;
-    // }
 
     /**
      * @dev Returns whether a position is a winning position
