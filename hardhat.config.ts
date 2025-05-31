@@ -27,19 +27,24 @@ module.exports = {
   // allowUnlimitedContractSize: true,
   networks: {
     hardhat: {
-      // forking: {
-      //   url: process.env.MAINNET_RPC_URL,
-      // },
-      // chainId: 33139,
+      forking: {
+        url: 'https://mainnet.infura.io/v3/ad1652df4ec34a6494374feec76fd4bc',
+      },
+      chainId: 31337,
       gasPrice: 5000000000000,
       allowUnlimitedContractSize: true,      
     },
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 31337,
+      allowUnlimitedContractSize: true,
+    },
     
-    curtis: {
-      url: "https://curtis.rpc.caldera.xyz/http",
-      chainId: 33111,
-      accounts: [process.env.CURTIS_PRIVATE_KEY],
-    }
+    // curtis: {
+    //   url: "https://curtis.rpc.caldera.xyz/http",
+    //   chainId: 33111,
+    //   accounts: [process.env.CURTIS_PRIVATE_KEY],
+    // }
     // remote: {
     //   url: 'http://ec2-3-89-186-112.compute-1.amazonaws.com:8545',
     //   chainId: 31337,
@@ -65,5 +70,12 @@ module.exports = {
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY,
+  },
+  ignition: {
+    strategyConfig: {
+      create2: {
+        salt: "0x0000000000000000000000000000000000000000000000000000000000000000",
+      },
+    },
   },
 };
