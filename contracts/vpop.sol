@@ -523,10 +523,6 @@ contract VPOP is Ownable {
 
         Market storage market = markets[marketId];
 
-        // console.log('INNNN the contract');
-        // console.log('commitment.wager', commitment.wager);
-        // console.log('consensus.totalWinnings', consensus.totalWinnings);
-        // console.log('consensus.winningWagers', consensus.winningWagers);
         uint256 winnings = 0;
         if(market.minWager > 0){
             // Calculate winnings based on proportion of total winning wagers
@@ -535,10 +531,7 @@ contract VPOP is Ownable {
         else{
             winnings = consensus.totalWinnings / consensus.winningCommitments;
         }
-        console.log('contract winnings', winnings);
-        // console.log('consensus.totalWinnings', consensus.totalWinnings);
-        // console.log('consensus.winningWagers', consensus.winningWagers);
-
+       
         // Mark as claimed
         commitment.claimed = true;
 
