@@ -28,7 +28,7 @@ module.exports = {
   networks: {
     hardhat: {
       forking: {
-        url: 'https://mainnet.infura.io/v3/ad1652df4ec34a6494374feec76fd4bc',
+        url: `https://mainnet.infura.io/v3/${process.env.INFURA_API_KEY}`,
       },
       chainId: 31337,
       gasPrice: 5000000000000,
