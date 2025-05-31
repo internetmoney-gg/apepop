@@ -810,6 +810,77 @@ describe("VPOP", function () {
   });
 
   describe("Market Resolve", function () {
+    it("should handle incorrect winning threshold proposals", async function () {
+      // Create a market
+      const marketId = await createMarket({
+        vpopContract: vpop,
+        signer: owner,
+        lowerBound: 0n,
+        upperBound: 1000n,
+        decimals: 1,
+        minWager: ethers.parseEther("0.1"),
+        decayFactor: 0,
+        commitDuration: 3600,
+        revealDuration: 3600,
+        winningPercentile: 8000, // 80% winningPercentile
+        ipfsHash: "ipfs://threshold-test"
+      });
+
+      // Create commitments with different positions
+      const positions = [100n, 200n, 300n, 400n];
+      const wagers = [
+        ethers.parseEther("1"),
+        ethers.parseEther("1"),
+        ethers.parseEther("1"),
+        ethers.parseEther("1")
+      ];
+      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
+
+      // Submit all commitments
+      for (let i = 0; i < 4; i++) {
+        await vpop.connect([owner, otherAccount, thirdAccount, owner][i])
+          .commit(marketId, commitmentHashes[i], wagers[i], [], { value: wagers[i] });
+      }
+
+      // Move to reveal phase
+      await time.increase(3601);
+
+      // Reveal all commitments
+      for (let i = 0; i < 4; i++) {
+        await vpop.connect([owner, otherAccount, thirdAccount, owner][i])
+          .reveal(marketId, i+1, commitmentHashes[i], positions[i], wagers[i], nonces[i]);
+      }
+
+      // Move to resolution phase
+      await time.increase(3601);
+
+      // Calculate the true winning threshold
+      const trueThreshold = await calculateWinningThreshold(vpop, marketId);
+      
+      // Try to resolve with a threshold that's too high
+      const tooHighThreshold = trueThreshold + 2n;
+      await expect(vpop.resolve(marketId, tooHighThreshold))
+        .to.be.revertedWith("Proposed winning threshold does not match farthest winning distance");
+
+      // Try to resolve with a threshold that's too low
+      const tooLowThreshold = trueThreshold - 2n;
+      await expect(vpop.resolve(marketId, tooLowThreshold))
+        .to.be.revertedWith("Proposed winning threshold does not match farthest winning distance");
+
+      // Resolve with the correct threshold
+      await vpop.resolve(marketId, trueThreshold);
+
+      // Verify market is resolved
+      const marketConsensus = await vpop.marketConsensus(marketId);
+      expect(marketConsensus.resolved).to.be.true;
+      expect(marketConsensus.winningThreshold).to.equal(trueThreshold);
+
+      // Try to resolve again with the correct threshold
+      await expect(vpop.resolve(marketId, trueThreshold))
+        .to.be.revertedWith("Market already resolved");
+    });
+    
     it("should resolve only after reveal phase or all revealed, and set consensus and winning threshold", async function () {
       // Use existing signers
       const signers = [owner, otherAccount, thirdAccount];
@@ -1597,6 +1668,7 @@ describe("VPOP", function () {
       expect(balanceChange).to.equal(firstPrizeAmount + secondPrizeAmount);
     });
   });
+
 
 });
 

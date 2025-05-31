@@ -448,6 +448,7 @@ contract VPOP is Ownable {
         uint256[] memory distances = new uint256[](consensus.revealedCommitments);
         uint256 distanceIndex = 0;
         uint256 dupsAtThreshold = 0;
+        uint256 farthestWinningDistance = 0;
         // Collect all revealed positions and calculate distances
         for (uint32 i = 0; i < consensus.totalCommitments; i++) {
             Commitment storage commitment = commitments[marketId][i+1];
@@ -461,23 +462,19 @@ contract VPOP is Ownable {
                 if(distances[distanceIndex] == proposedWinningThreshold){
                     dupsAtThreshold++;
                 }
-                // console.log('xxxxx');
-                // console.log('distances[distanceIndex]', distances[distanceIndex]);
-                // console.log('proposedWinningThreshold', proposedWinningThreshold);
-                // Check if the commitment is a winning commitment, given the proposed winning threshold
+               // Check if the commitment is a winning commitment, given the proposed winning threshold
                 if(distances[distanceIndex] <= proposedWinningThreshold){
                     consensus.winningWagers += commitment.wager;
                     consensus.winningCommitments++;
+                    if(distances[distanceIndex] > farthestWinningDistance){
+                        farthestWinningDistance = distances[distanceIndex];
+                    }
                 }
                 distanceIndex++;
             }
         }
-        // console.log('000000000');
-        // console.log('consensus.revealedCommitments', consensus.revealedCommitments);
-        // console.log('consensus.totalCommitments', consensus.totalCommitments);
-        // console.log('market.winningPercentile', market.winningPercentile);
-        // console.log('dupsAtThreshold', dupsAtThreshold);
-        // console.log('((consensus.totalCommitments * market.winningPercentile) / 10000): ',((consensus.totalCommitments * market.winningPercentile) / 10000));
+        require(farthestWinningDistance == proposedWinningThreshold, "Proposed winning threshold does not match farthest winning distance");
+        
         // Calculate expected winning commitments based on winningPercentile
         uint256 expectedWinningCommitments = ((consensus.totalCommitments * market.winningPercentile) / 10000);
         // Ensure we have at least one winning commitment
@@ -485,8 +482,6 @@ contract VPOP is Ownable {
             expectedWinningCommitments = 1;
         }
         expectedWinningCommitments += (dupsAtThreshold-1);
-        // console.log('expectedWinningCommitments', expectedWinningCommitments);
-        // console.log('consensus.winningCommitments', consensus.winningCommitments);
         // Verify that the number of winning commitments matches our expected number
         require(
             consensus.winningCommitments == expectedWinningCommitments,
