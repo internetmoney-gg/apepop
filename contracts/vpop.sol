@@ -453,7 +453,7 @@ contract VPOP is Ownable {
         uint256 targetRank;
 
         if (market.winningPercentile == 0) {
-            targetRank = 0;
+            targetRank = 1;
         } else {
             // Calculate targetRank: ceil((winningPercentile * revealedCommitmentCount) / 10000)
             // (A * B + D-1) / D for ceil(A*B/D)
