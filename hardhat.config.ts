@@ -26,7 +26,7 @@ module.exports = {
   solidity: "0.8.28",
   // allowUnlimitedContractSize: true,
   networks: {
-    hardhat: {
+    localhost: {
       // forking: {
       //   url: process.env.MAINNET_RPC_URL,
       // },

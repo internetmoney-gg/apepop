@@ -6,7 +6,8 @@
   "scripts": {
     "test": "hardhat test",
     "compile": "hardhat compile",
-    "deploy:local": "hardhat run scripts/deploy.ts --network hardhat",
+    "localNode": "npx hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
     "deploy:curtis": "hardhat run scripts/deploy.ts --network curtis",
     "deploy:apechain": "hardhat run scripts/deploy.ts --network apechain"
   },

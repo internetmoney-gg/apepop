@@ -5,8 +5,10 @@ async function main() {
 
   // Get the signer
   const [deployer] = await ethers.getSigners();
-  console.log('deployer: ',deployer);
-  console.log("Deploying with account:", deployer.address);
+  console.log('Network:', await ethers.provider.getNetwork());
+  console.log('Provider URL:', (ethers.provider as any).connection?.url || 'boof');
+  console.log('Deployer address:', deployer.address);
+  console.log('Deployer balance:', ethers.formatEther(await ethers.provider.getBalance(deployer.address)), 'ETH');
 
   // Get the contract factory
   const VPOP = await ethers.getContractFactory("VPOP");
