@@ -442,13 +442,10 @@ contract VPOP is Ownable {
         
         require(consensus.revealedCommitments > 0, "No revealed commitments to resolve"); // Ensure there's something to resolve
         
-        // Calculate market consensus position (if not already done or if it needs re-verification)
-        // This part remains the same as it's about finding the central point
+        // Calculate market consensus position
         if (consensus.totalWeight > 0) { // Avoid division by zero if no weights (e.g., all reveals failed, though unlikely here)
             consensus.consensusPosition = consensus.weightedSum / consensus.totalWeight;
         } else {
-             // Handle case with no weight, perhaps set consensusPosition to a default or revert
-             // For now, we assume totalWeight > 0 if revealedCommitments > 0 and reveals were valid
              revert("No weight in consensus, cannot determine consensus position");
         }
 
@@ -468,8 +465,8 @@ contract VPOP is Ownable {
 
         uint256 numStrictlyBelowPWT = 0;
         uint256 numAtOrBelowPWT = 0;
-        consensus.winningWagers = 0; // Reset before recalculating
-        consensus.winningCommitments = 0; // Reset before recalculating
+        consensus.winningWagers = 0;
+        consensus.winningCommitments = 0;
 
         for (uint256 i = 0; i < consensus.totalCommitments; i++) {
             Commitment storage commitment = commitments[marketId][i + 1];
@@ -492,17 +489,8 @@ contract VPOP is Ownable {
             }
         }
 
-        if (targetRank == 0) {
-            require(numAtOrBelowPWT == 0, "Winners found but percentile is 0");
-            // If targetRank is 0, winningCommitments should be 0 as per loop above.
-            // proposedWinningThreshold should be less than any actual distance.
-        } else {
-            require(numStrictlyBelowPWT < targetRank, "PWT too high or non-existent rank");
-            require(numAtOrBelowPWT >= targetRank, "PWT too low or non-existent rank");
-        }
-        
-        // The number of winning commitments (consensus.winningCommitments) and winning wagers (consensus.winningWagers)
-        // are now correctly calculated based on the validated proposedWinningThreshold.
+        require(numStrictlyBelowPWT < targetRank, "PWT too high or non-existent rank");
+        require(numAtOrBelowPWT >= targetRank, "PWT too low or non-existent rank");
 
         consensus.winningThreshold = proposedWinningThreshold;
         // Mark market as resolved
