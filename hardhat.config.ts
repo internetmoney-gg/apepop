@@ -27,9 +27,9 @@ module.exports = {
   // allowUnlimitedContractSize: true,
   networks: {
     hardhat: {
-      forking: {
-        url: `https://mainnet.infura.io/v3/${process.env.INFURA_API_KEY}`,
-      },
+      // forking: {
+      //   url: `https://mainnet.infura.io/v3/${process.env.INFURA_API_KEY}`,
+      // },
       chainId: 31337,
       gasPrice: 5000000000000,
       allowUnlimitedContractSize: true,      

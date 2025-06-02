@@ -439,59 +439,74 @@ contract VPOP is Ownable {
         bool allRevealed = consensus.totalCommitments > 0 && consensus.totalCommitments == consensus.revealedCommitments;
         // Require either all commitments revealed or reveal phase ended
         require(allRevealed || revealPhaseEnded, "Market not ready for resolution");
-        // Calculate market consensus
-        require(consensus.totalWeight > 0, "No commitments to resolve");
-        consensus.consensusPosition = consensus.weightedSum / consensus.totalWeight;
-        // console.log("marketId: ", marketId);
+        
+        require(consensus.revealedCommitments > 0, "No revealed commitments to resolve"); // Ensure there's something to resolve
+        
+        // Calculate market consensus position (if not already done or if it needs re-verification)
+        // This part remains the same as it's about finding the central point
+        if (consensus.totalWeight > 0) { // Avoid division by zero if no weights (e.g., all reveals failed, though unlikely here)
+            consensus.consensusPosition = consensus.weightedSum / consensus.totalWeight;
+        } else {
+             // Handle case with no weight, perhaps set consensusPosition to a default or revert
+             // For now, we assume totalWeight > 0 if revealedCommitments > 0 and reveals were valid
+             revert("No weight in consensus, cannot determine consensus position");
+        }
 
-        // Calculate distances from consensus for each revealed commitment
-        uint256[] memory distances = new uint256[](consensus.revealedCommitments);
-        uint256 distanceIndex = 0;
-        uint256 dupsAtThreshold = 0;
-        uint256 farthestWinningDistance = 0;
-        // Collect all revealed positions and calculate distances
-        for (uint32 i = 0; i < consensus.totalCommitments; i++) {
-            Commitment storage commitment = commitments[marketId][i+1];
-            if (commitment.revealed) {
-                // positions[distanceIndex] = commitment.position;
-                // Calculate absolute distance from consensus
-                distances[distanceIndex] = commitment.position > consensus.consensusPosition ? 
-                    commitment.position - consensus.consensusPosition : 
-                    consensus.consensusPosition - commitment.position;
-                
-                if(distances[distanceIndex] == proposedWinningThreshold){
-                    dupsAtThreshold++;
-                }
-               // Check if the commitment is a winning commitment, given the proposed winning threshold
-                if(distances[distanceIndex] <= proposedWinningThreshold){
-                    consensus.winningWagers += commitment.wager;
-                    consensus.winningCommitments++;
-                    if(distances[distanceIndex] > farthestWinningDistance){
-                        farthestWinningDistance = distances[distanceIndex];
-                    }
-                }
-                distanceIndex++;
+        uint256 revealedCommitmentCount = consensus.revealedCommitments;
+        uint256 targetRank;
+
+        if (market.winningPercentile == 0) {
+            targetRank = 0;
+        } else {
+            // Calculate targetRank: ceil((winningPercentile * revealedCommitmentCount) / 10000)
+            // (A * B + D-1) / D for ceil(A*B/D)
+            targetRank = (uint256(market.winningPercentile) * revealedCommitmentCount + (10000 - 1)) / 10000;
+            if (targetRank == 0 && revealedCommitmentCount > 0) { // Ensure at least 1 winner if percentile > 0 and commitments exist
+                targetRank = 1;
             }
         }
-        require(farthestWinningDistance == proposedWinningThreshold, "Proposed winning threshold does not match farthest winning distance");
-        
-        // Calculate expected winning commitments based on winningPercentile
-        uint256 expectedWinningCommitments = ((consensus.totalCommitments * market.winningPercentile) / 10000);
-        // Ensure we have at least one winning commitment
-        if (expectedWinningCommitments == 0 && consensus.totalCommitments > 0) {
-            expectedWinningCommitments = 1;
+
+        uint256 numStrictlyBelowPWT = 0;
+        uint256 numAtOrBelowPWT = 0;
+        consensus.winningWagers = 0; // Reset before recalculating
+        consensus.winningCommitments = 0; // Reset before recalculating
+
+        for (uint256 i = 0; i < consensus.totalCommitments; i++) {
+            Commitment storage commitment = commitments[marketId][i + 1];
+            if (commitment.revealed) {
+                uint256 distance;
+                if (commitment.position > consensus.consensusPosition) {
+                    distance = commitment.position - consensus.consensusPosition;
+                } else {
+                    distance = consensus.consensusPosition - commitment.position;
+                }
+
+                if (distance < proposedWinningThreshold) {
+                    numStrictlyBelowPWT++;
+                }
+                if (distance <= proposedWinningThreshold) {
+                    numAtOrBelowPWT++;
+                    consensus.winningWagers += commitment.wager;
+                    consensus.winningCommitments++;
+                }
+            }
         }
-        expectedWinningCommitments += (dupsAtThreshold-1);
-        // Verify that the number of winning commitments matches our expected number
-        require(
-            consensus.winningCommitments == expectedWinningCommitments,
-            "Invalid number of winning commitments"
-        );
+
+        if (targetRank == 0) {
+            require(numAtOrBelowPWT == 0, "Winners found but percentile is 0");
+            // If targetRank is 0, winningCommitments should be 0 as per loop above.
+            // proposedWinningThreshold should be less than any actual distance.
+        } else {
+            require(numStrictlyBelowPWT < targetRank, "PWT too high or non-existent rank");
+            require(numAtOrBelowPWT >= targetRank, "PWT too low or non-existent rank");
+        }
+        
+        // The number of winning commitments (consensus.winningCommitments) and winning wagers (consensus.winningWagers)
+        // are now correctly calculated based on the validated proposedWinningThreshold.
 
         consensus.winningThreshold = proposedWinningThreshold;
         // Mark market as resolved
         consensus.resolved = true;
-
     }
 
     /**

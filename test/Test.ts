@@ -861,12 +861,12 @@ describe("VPOP", function () {
       // Try to resolve with a threshold that's too high
       const tooHighThreshold = trueThreshold + 2n;
       await expect(vpop.resolve(marketId, tooHighThreshold))
-        .to.be.revertedWith("Proposed winning threshold does not match farthest winning distance");
+        .to.be.revertedWith("PWT too high or non-existent rank");
 
       // Try to resolve with a threshold that's too low
       const tooLowThreshold = trueThreshold - 2n;
       await expect(vpop.resolve(marketId, tooLowThreshold))
-        .to.be.revertedWith("Proposed winning threshold does not match farthest winning distance");
+        .to.be.revertedWith("PWT too low or non-existent rank");
 
       // Resolve with the correct threshold
       await vpop.resolve(marketId, trueThreshold);
