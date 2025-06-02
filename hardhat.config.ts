@@ -31,6 +31,8 @@ module.exports = {
       //   url: process.env.MAINNET_RPC_URL,
       // },
       // chainId: 33139,
+      cors: true,
+      chainId: 31337,
       gasPrice: 2000000000,
       allowUnlimitedContractSize: true,      
     },
