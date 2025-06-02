@@ -452,15 +452,11 @@ contract VPOP is Ownable {
         uint256 revealedCommitmentCount = consensus.revealedCommitments;
         uint256 targetRank;
 
-        if (market.winningPercentile == 0) {
+        // Calculate targetRank: ceil((winningPercentile * revealedCommitmentCount) / 10000)
+        // (A * B + D-1) / D for ceil(A*B/D)
+        targetRank = (uint256(market.winningPercentile) * revealedCommitmentCount + (10000 - 1)) / 10000;
+        if (targetRank == 0 && revealedCommitmentCount > 0) { // Ensure at least 1 winner if percentile > 0 and commitments exist
             targetRank = 1;
-        } else {
-            // Calculate targetRank: ceil((winningPercentile * revealedCommitmentCount) / 10000)
-            // (A * B + D-1) / D for ceil(A*B/D)
-            targetRank = (uint256(market.winningPercentile) * revealedCommitmentCount + (10000 - 1)) / 10000;
-            if (targetRank == 0 && revealedCommitmentCount > 0) { // Ensure at least 1 winner if percentile > 0 and commitments exist
-                targetRank = 1;
-            }
         }
 
         uint256 numStrictlyBelowPWT = 0;
