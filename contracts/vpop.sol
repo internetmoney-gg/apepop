@@ -362,7 +362,6 @@ contract VPOP is Ownable {
      * @param commitmentId The ID of the commitment to reveal
      * @param commitmentHash The hash of the commitment to reveal
      * @param position The original position value
-     * @param wager The original wager amount
      * @param nonce The original nonce
      */
     function reveal(
@@ -370,7 +369,6 @@ contract VPOP is Ownable {
         uint256 commitmentId,
         bytes32 commitmentHash,
         uint256 position,
-        uint256 wager,
         uint256 nonce
     ) external {
         // Validate market exists
@@ -392,8 +390,8 @@ contract VPOP is Ownable {
         require(commitment.commitmentHash == commitmentHash, "Commitment does not exist");
         require(!commitment.revealed, "Commitment already revealed");
         
-        // Verify the revealed data matches the commitment hash
-        bytes32 calculatedHash = keccak256(abi.encodePacked(position, wager, nonce));
+        // Verify the revealed data matches the commitment hash using stored wager
+        bytes32 calculatedHash = keccak256(abi.encodePacked(position, commitment.wager, nonce));
         require(
             calculatedHash == commitmentHash,
             "Revealed data does not match commitment hash"
@@ -415,7 +413,7 @@ contract VPOP is Ownable {
             commitmentId,
             commitmentHash,
             position,
-            wager,
+            commitment.wager,
             nonce
         );
     }

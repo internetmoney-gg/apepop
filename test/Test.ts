@@ -626,7 +626,7 @@ describe("VPOP", function () {
       await time.increase(3601);
 
       // Reveal commitment
-      await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
+      await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Verify the commitment is marked as revealed
       const commitment2 = await vpop.commitments(marketId, 1);
@@ -665,7 +665,7 @@ describe("VPOP", function () {
 
       // Try to reveal during commit phase
       await expect(
-        vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce)
+        vpop.reveal(marketId, 1, commitmentHash, position, nonce)
       ).to.be.revertedWith("Not in reveal phase");
     });
 
@@ -715,14 +715,14 @@ describe("VPOP", function () {
 
       await time.increase(3600 + 1);
       // Try to reveal before reveal phase ends (should fail)
-      await vpop.reveal(marketId, 2, commitmentHash2, position, wager, nonce);
+      await vpop.reveal(marketId, 2, commitmentHash2, position, nonce);
       
       // Advance time past both commit and reveal phases
       await time.increase(7200 + 1);
 
       // Try to reveal after reveal phase
       await expect(
-        vpop.reveal(marketId, 1, commitmentHash1, position, wager, nonce)
+        vpop.reveal(marketId, 1, commitmentHash1, position, nonce)
       ).to.be.revertedWith("Not in reveal phase");
     });
 
@@ -762,7 +762,7 @@ describe("VPOP", function () {
       // Try to reveal with incorrect data
       const incorrectPosition = 6000n;
       await expect(
-        vpop.reveal(marketId, 1, commitmentHash, incorrectPosition, wager, nonce)
+        vpop.reveal(marketId, 1, commitmentHash, incorrectPosition, nonce)
       ).to.be.revertedWith("Revealed data does not match commitment hash");
     });
 
@@ -800,11 +800,11 @@ describe("VPOP", function () {
       await time.increase(3600 + 1);
 
       // Reveal the commitment
-      await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
+      await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Try to reveal the same commitment again
       await expect(
-        vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce)
+        vpop.reveal(marketId, 1, commitmentHash, position, nonce)
       ).to.be.revertedWith("Commitment already revealed");
     });
   });
@@ -849,7 +849,7 @@ describe("VPOP", function () {
       // Reveal all commitments
       for (let i = 0; i < 4; i++) {
         await vpop.connect([owner, otherAccount, thirdAccount, owner][i])
-          .reveal(marketId, i+1, commitmentHashes[i], positions[i], wagers[i], nonces[i]);
+          .reveal(marketId, i+1, commitmentHashes[i], positions[i], nonces[i]);
       }
 
       // Move to resolution phase
@@ -941,7 +941,6 @@ describe("VPOP", function () {
           i+1,
           commitmentHashes[i],
           positions[i],
-          wagers[i],
           nonces[i]
         );
         const receipt = await tx.wait();
@@ -1054,7 +1053,7 @@ describe("VPOP", function () {
       // Reveal all commitments
       for (let i = 0; i < 4; i++) {
         await vpop.connect([owner, otherAccount, thirdAccount, owner][i])
-          .reveal(marketId, i+1, commitmentHashes[i], positions[i], wagers[i], nonces[i]);
+          .reveal(marketId, i+1, commitmentHashes[i], positions[i], nonces[i]);
       }
 
       // Move to resolution phase
@@ -1140,7 +1139,7 @@ describe("VPOP", function () {
       // Reveal all commitments
       for (let i = 0; i < 5; i++) {
         await vpop.connect([owner, otherAccount, thirdAccount, owner, otherAccount][i])
-          .reveal(marketId, i+1, commitmentHashes[i], positions[i], wagers[i], nonces[i]);
+          .reveal(marketId, i+1, commitmentHashes[i], positions[i], nonces[i]);
       }
 
       // Verify all commitments have been revealed
@@ -1231,7 +1230,7 @@ describe("VPOP", function () {
       const event = receipt?.logs[0];
 
       await time.increase(3601);
-      await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
+      await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Try to claim before resolution
       await expect(vpop.claim(marketId, 1))
@@ -1288,7 +1287,7 @@ describe("VPOP", function () {
       const event2 = receipt2?.logs[0];
 
       await time.increase(3601);
-      await vpop.reveal(marketId, 2, commitmentHash2, position2, wager2, nonce2);
+      await vpop.reveal(marketId, 2, commitmentHash2, position2, nonce2);
       await time.increase(7201); // Move past reveal phase
       const winningThreshold = await calculateWinningThreshold(vpop, marketId);
       await vpop.resolve(marketId, winningThreshold);
@@ -1334,7 +1333,7 @@ describe("VPOP", function () {
       await time.increase(3601);
 
       // Reveal commitment
-      await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
+      await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Move to resolution phase
       await time.increase(3601);
@@ -1541,7 +1540,7 @@ describe("VPOP", function () {
       await time.increase(3601);
 
       // Reveal commitment
-      await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
+      await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Verify commitment was revealed
       const commitment = await vpop.commitments(marketId, 1);
@@ -1633,13 +1632,13 @@ describe("VPOP", function () {
 
       // Try to reveal before reveal phase
       await expect(
-        vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce)
+        vpop.reveal(marketId, 1, commitmentHash, position, nonce)
       ).to.be.revertedWith("Not in reveal phase");
       // Move to reveal phase
       await time.increase(3601);
 
       // Reveal commitment
-      await vpop.reveal(marketId, 1, commitmentHash, position, wager, nonce);
+      await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Move to resolution phase
       await time.increase(3601);
