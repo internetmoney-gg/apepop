@@ -26,18 +26,15 @@ module.exports = {
   solidity: "0.8.28",
   // allowUnlimitedContractSize: true,
   networks: {
-    hardhat: {
+    localhost: {
       // forking: {
       //   url: `https://mainnet.infura.io/v3/${process.env.INFURA_API_KEY}`,
       // },
+      // chainId: 33139,
+      cors: true,
       chainId: 31337,
-      gasPrice: 5000000000000,
+      gasPrice: 2000000000,
       allowUnlimitedContractSize: true,      
-    },
-    localhost: {
-      url: "http://127.0.0.1:8545",
-      chainId: 31337,
-      allowUnlimitedContractSize: true,
     },
     
     // curtis: {
