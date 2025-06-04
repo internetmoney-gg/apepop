@@ -267,8 +267,7 @@ contract VPOP is Ownable {
             require(verified, "Address not whitelisted");
             whitelistCommits[marketId][msg.sender] = true;
             wager = 100000;
-        }
-        else{
+        } else {
             //normal market
             // Calculate platform fee
             uint256 platformFee = (wager * platformFeeRate) / 10000;
@@ -431,11 +430,10 @@ contract VPOP is Ownable {
         
         // Check if market is already resolved
         require(!consensus.resolved, "Market already resolved");
-        // Check if reveal phase has ended
-        bool revealPhaseEnded = block.timestamp > market.createdAt + market.commitDuration + market.revealDuration;
-        // Check if all commitments have been revealed
-        bool allRevealed = consensus.totalCommitments > 0 && consensus.totalCommitments == consensus.revealedCommitments;
+
         // Require either all commitments revealed or reveal phase ended
+        bool revealPhaseEnded = block.timestamp > market.createdAt + market.commitDuration + market.revealDuration;
+        bool allRevealed = consensus.totalCommitments > 0 && consensus.totalCommitments == consensus.revealedCommitments;
         require(allRevealed || revealPhaseEnded, "Market not ready for resolution");
         
         require(consensus.revealedCommitments > 0, "No revealed commitments to resolve"); // Ensure there's something to resolve
@@ -453,7 +451,7 @@ contract VPOP is Ownable {
         // Calculate targetRank: ceil((winningPercentile * revealedCommitmentCount) / 10000)
         // (A * B + D-1) / D for ceil(A*B/D)
         targetRank = (uint256(market.winningPercentile) * revealedCommitmentCount + (10000 - 1)) / 10000;
-        if (targetRank == 0 && revealedCommitmentCount > 0) { // Ensure at least 1 winner if percentile > 0 and commitments exist
+        if (targetRank == 0 && revealedCommitmentCount > 0) { // Ensure at least 1 winner if commitments exist
             targetRank = 1;
         }
 
@@ -479,6 +477,9 @@ contract VPOP is Ownable {
                     numAtOrBelowPWT++;
                     consensus.winningWagers += commitment.wager;
                     consensus.winningCommitments++;
+                } else {
+                    // Clear storage for fat refund
+                    delete commitments[marketId][i + 1];
                 }
             }
         }
@@ -535,6 +536,9 @@ contract VPOP is Ownable {
             IERC20 token = IERC20(market.token);
             require(token.transfer(commitment.owner, winnings), "Token transfer failed");
         }
+
+        // Clear storage
+        delete commitments[marketId][commitmentId];
         
         emit WinningsClaimed(marketId, msg.sender, commitmentId, winnings);
     }
@@ -574,7 +578,4 @@ contract VPOP is Ownable {
     function getMarket(uint256 marketId) public view returns (Market memory) {
         return markets[marketId];
     }
-
-
-   
 }
