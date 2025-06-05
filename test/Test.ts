@@ -156,7 +156,6 @@ describe("VPOP", function () {
     const [ownerSigner, otherAccountSigner, thirdAccountSigner] = await hre.ethers.getSigners();
     owner = ownerSigner;
     console.log('owner.address: ',owner.address);
-    console.log('owner private key: ', owner.privateKey);
 
 
     otherAccount = otherAccountSigner;
@@ -438,11 +437,12 @@ describe("VPOP", function () {
       const newPlatformFeeRate = 1000; // 10%
       const newCreatorFeeRate = 300; // 3%
       const newApeFeeRate = 300; // 3%
-
+      const newMarketCreateFee = 0; // 0 ETH market creation fee
       await vpop.updatePlatformSettings(
         newPlatformFeeRate,
         newCreatorFeeRate,
-        newApeFeeRate
+        newApeFeeRate,
+        newMarketCreateFee
       );
 
       const platformFeeRate = await vpop.platformFeeRate();
@@ -458,12 +458,13 @@ describe("VPOP", function () {
       const newPlatformFeeRate = 1000;
       const newCreatorFeeRate = 300;
       const newApeFeeRate = 300;
-
+      const newMarketCreateFee = 0; // 0 ETH market creation fee
       await expect(
         vpop.connect(otherAccount).updatePlatformSettings(
           newPlatformFeeRate,
           newCreatorFeeRate,
-          newApeFeeRate
+          newApeFeeRate,  
+          newMarketCreateFee
         )
       ).to.be.revertedWithCustomError(vpop, "OwnableUnauthorizedAccount");
     });
@@ -1668,7 +1669,113 @@ describe("VPOP", function () {
     });
   });
 
+  describe("Market Creation Fee", function () {
+    const marketCreateFee = ethers.parseEther("0.1"); // 0.1 ETH market creation fee
 
+    it("Should allow owner to update market creation fee", async function () {
+      const tx = await vpop.updatePlatformSettings(800, 200, 200, marketCreateFee);
+      await tx.wait();
+      
+      const newFee = await vpop.marketCreateFee();
+      expect(newFee).to.equal(marketCreateFee);
+    });
+
+    it("Should not allow non-owner to update market creation fee", async function () {
+      await expect(
+        vpop.connect(otherAccount).updatePlatformSettings(800, 200, 200, marketCreateFee)
+      ).to.be.reverted;
+    });
+
+    it("Should allow market creation when correct fee is sent", async function () {
+      const initialOwnerBalance = await ethers.provider.getBalance(owner.address);
+      
+      const tx = await vpop.connect(otherAccount).initializeMarket(
+        ethers.ZeroAddress,
+        0,
+        100,
+        1,
+        ethers.parseEther("0.1"),
+        20,
+        3600,
+        3600,
+        50,
+        "QmTest123",
+        { value: marketCreateFee }
+      );
+      
+      const receipt = await tx.wait();
+      const finalOwnerBalance = await ethers.provider.getBalance(owner.address);
+
+      // Check that owner received the fee
+      expect(finalOwnerBalance - initialOwnerBalance).to.equal(marketCreateFee);
+      
+    });
+
+    it("Should not allow market creation when insufficient fee is sent", async function () {
+      const insufficientFee = ethers.parseEther("0.05"); // Half the required fee
+      
+      await expect(
+        vpop.connect(otherAccount).initializeMarket(
+          ethers.ZeroAddress,
+          0,
+          100,
+          1,
+          ethers.parseEther("0.1"),
+          20,
+          3600,
+          3600,
+          50,
+          "QmTest123",
+          { value: insufficientFee }
+        )
+      ).to.be.revertedWith("Market create fee not met");
+    });
+
+    it("Should not allow market creation when no fee is sent", async function () {
+      await expect(
+        vpop.connect(otherAccount).initializeMarket(
+          ethers.ZeroAddress,
+          0,
+          100,
+          1,
+          ethers.parseEther("0.1"),
+          20,
+          3600,
+          3600,
+          50,
+          "QmTest123"
+        )
+      ).to.be.revertedWith("Market create fee not met");
+    });
+
+    it("Should allow market creation when fee is set to 0", async function () {
+      // First set fee to 0
+      await vpop.updatePlatformSettings(800, 200, 200, 0);
+      
+      // Get initial market count
+      const initialMarketCount = await vpop.getMarketCount();
+      
+      // Try creating market without fee
+      const tx = await vpop.connect(otherAccount).initializeMarket(
+        ethers.ZeroAddress,
+        0,
+        100,
+        1,
+        ethers.parseEther("0.1"),
+        20,
+        3600,
+        3600,
+        50,
+        "QmTest123"
+      );
+      
+      const receipt = await tx.wait();
+      const finalMarketCount = await vpop.getMarketCount();
+      
+      // Verify market count increased by 1
+      expect(finalMarketCount).to.equal(initialMarketCount + 1n);
+    });
+  });
 });
 
 

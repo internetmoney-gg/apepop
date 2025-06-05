@@ -14,6 +14,7 @@ contract VPOP is Ownable {
     uint256 public platformFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public creatorFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public apeFeeRate; // Fee rate in basis points (1% = 100)
+    uint256 public marketCreateFee; // Fee rate in basis points (1% = 100)
     address public apeOwner = 0x1000000000000000000000000000000000000000; // Address that receives ape fees
 
     struct Market {
@@ -115,6 +116,7 @@ contract VPOP is Ownable {
         platformFeeRate = 800; // 8% in basis points (1000 = 10%)
         creatorFeeRate = 200; // 2% in basis points (1000 = 10%)
         apeFeeRate = 200; // 2% in basis points (1000 = 10%)
+        marketCreateFee = 0; //lets start with 0
     }
 
     /**
@@ -123,10 +125,11 @@ contract VPOP is Ownable {
      * @param _newCreatorFeeRate The new fee rate in basis points (1% = 100)
      * @param _newApeFeeRate The new fee rate in basis points (1% = 100)
      */
-    function updatePlatformSettings(uint256 _newPlatformFeeRate, uint256 _newCreatorFeeRate, uint256 _newApeFeeRate) external onlyOwner {
+    function updatePlatformSettings(uint256 _newPlatformFeeRate, uint256 _newCreatorFeeRate, uint256 _newApeFeeRate, uint256 _marketCreateFee) external onlyOwner {
         platformFeeRate = _newPlatformFeeRate;
         creatorFeeRate = _newCreatorFeeRate;
         apeFeeRate = _newApeFeeRate;
+        marketCreateFee = _marketCreateFee;
     }
 
     function updateWhitelistRoot(uint256 marketId, bytes32 whitelistRoot) external onlyOwner {
@@ -159,7 +162,6 @@ contract VPOP is Ownable {
      * @param _revealDuration The duration of the reveal phase in seconds
      * @param _winningPercentile The winningPercentile value (0-10000)
      * @param _ipfsHash The IPFS hash containing additional market data
-     
      * @return marketId The ID of the newly created market
      */
     function initializeMarket(
@@ -173,7 +175,7 @@ contract VPOP is Ownable {
         uint256 _revealDuration,
         uint16 _winningPercentile,
         string memory _ipfsHash
-    ) public returns (uint256 marketId) {
+    ) public payable returns (uint256 marketId) {
         // Input validation
         require(_lowerBound < _upperBound, "Lower bound must be less than upper bound");
         require(_decimals <= 18, "Decimals must be <= 18");
@@ -183,7 +185,13 @@ contract VPOP is Ownable {
         require(_revealDuration > 0, "Reveal duration must be greater than 0");
         require(_winningPercentile <= 10000, "Winning Percentile must be <= 10000 (100%)");
         require(bytes(_ipfsHash).length > 0, "IPFS hash cannot be empty");
-
+    
+        if(marketCreateFee > 0){
+            require(msg.value >= marketCreateFee, "Market create fee not met");
+            (bool success, ) = owner().call{value: marketCreateFee}("");
+            require(success, "Market create fee transfer failed");
+        }
+        
         // Get the next market ID and increment the counter
          _marketIdCounter++;
         marketId = _marketIdCounter;
@@ -308,7 +316,7 @@ contract VPOP is Ownable {
 
                 // Transfer fees to platform and creator from contract
                 require(
-                    token.transfer(owner(), platformFee),
+                    token.transfer(address(owner()), platformFee),
                     "Platform fee transfer failed"
                 );
                 require(
