@@ -10,7 +10,7 @@ async function main() {
   console.log('Deployer balance:', ethers.formatEther(await ethers.provider.getBalance(deployer.address)), 'ETH');
 
   // Get the deployed VPOP contract
-  const vpopAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3"; // Replace with your deployed contract address
+  const vpopAddress = "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"; // Replace with your deployed contract address
   const VPOP = await ethers.getContractFactory("VPOP");
   const vpop = await VPOP.attach(vpopAddress) as unknown as VPOP;
 

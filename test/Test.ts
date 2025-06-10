@@ -438,11 +438,13 @@ describe("VPOP", function () {
       const newCreatorFeeRate = 300; // 3%
       const newApeFeeRate = 300; // 3%
       const newMarketCreateFee = 0; // 0 ETH market creation fee
+      const newAllowPublicMarkets = true;
       await vpop.updatePlatformSettings(
         newPlatformFeeRate,
         newCreatorFeeRate,
         newApeFeeRate,
-        newMarketCreateFee
+        newMarketCreateFee,
+        newAllowPublicMarkets
       );
 
       const platformFeeRate = await vpop.platformFeeRate();
@@ -459,12 +461,14 @@ describe("VPOP", function () {
       const newCreatorFeeRate = 300;
       const newApeFeeRate = 300;
       const newMarketCreateFee = 0; // 0 ETH market creation fee
+      const newAllowPublicMarkets = true;
       await expect(
         vpop.connect(otherAccount).updatePlatformSettings(
           newPlatformFeeRate,
           newCreatorFeeRate,
           newApeFeeRate,  
-          newMarketCreateFee
+          newMarketCreateFee,
+          newAllowPublicMarkets
         )
       ).to.be.revertedWithCustomError(vpop, "OwnableUnauthorizedAccount");
     });
@@ -1673,7 +1677,7 @@ describe("VPOP", function () {
     const marketCreateFee = ethers.parseEther("0.1"); // 0.1 ETH market creation fee
 
     it("Should allow owner to update market creation fee", async function () {
-      const tx = await vpop.updatePlatformSettings(800, 200, 200, marketCreateFee);
+      const tx = await vpop.updatePlatformSettings(800, 200, 200, marketCreateFee, true);
       await tx.wait();
       
       const newFee = await vpop.marketCreateFee();
@@ -1682,7 +1686,7 @@ describe("VPOP", function () {
 
     it("Should not allow non-owner to update market creation fee", async function () {
       await expect(
-        vpop.connect(otherAccount).updatePlatformSettings(800, 200, 200, marketCreateFee)
+        vpop.connect(otherAccount).updatePlatformSettings(800, 200, 200, marketCreateFee, true)
       ).to.be.reverted;
     });
 
@@ -1750,13 +1754,86 @@ describe("VPOP", function () {
 
     it("Should allow market creation when fee is set to 0", async function () {
       // First set fee to 0
-      await vpop.updatePlatformSettings(800, 200, 200, 0);
+      await vpop.updatePlatformSettings(800, 200, 200, 0, true);
       
       // Get initial market count
       const initialMarketCount = await vpop.getMarketCount();
       
       // Try creating market without fee
       const tx = await vpop.connect(otherAccount).initializeMarket(
+        ethers.ZeroAddress,
+        0,
+        100,
+        1,
+        ethers.parseEther("0.1"),
+        20,
+        3600,
+        3600,
+        50,
+        "QmTest123"
+      );
+      
+      const receipt = await tx.wait();
+      const finalMarketCount = await vpop.getMarketCount();
+      
+      // Verify market count increased by 1
+      expect(finalMarketCount).to.equal(initialMarketCount + 1n);
+    });
+  });
+
+  describe("Public Market Access", function () {
+    it("Should allow public market creation when allowPublicMarkets is true", async function () {
+      // Ensure allowPublicMarkets is true
+      await vpop.updatePlatformSettings(800, 200, 200, 0, true);
+      
+      // Get initial market count
+      const initialMarketCount = await vpop.getMarketCount();
+      
+      // Try creating market as non-owner
+      const tx = await vpop.connect(otherAccount).initializeMarket(
+        ethers.ZeroAddress,
+        0,
+        100,
+        1,
+        ethers.parseEther("0.1"),
+        20,
+        3600,
+        3600,
+        50,
+        "QmTest123"
+      );
+      
+      const receipt = await tx.wait();
+      const finalMarketCount = await vpop.getMarketCount();
+      
+      // Verify market count increased by 1
+      expect(finalMarketCount).to.equal(initialMarketCount + 1n);
+    });
+
+    it("Should only allow owner to create markets when allowPublicMarkets is false", async function () {
+      // Set allowPublicMarkets to false
+      await vpop.updatePlatformSettings(800, 200, 200, 0, false);
+      
+      // Try creating market as non-owner
+      await expect(
+        vpop.connect(otherAccount).initializeMarket(
+          ethers.ZeroAddress,
+          0,
+          100,
+          1,
+          ethers.parseEther("0.1"),
+          20,
+          3600,
+          3600,
+          50,
+          "QmTest123"
+        )
+      ).to.be.revertedWith("Only owner can create markets");
+
+      // Verify owner can still create markets
+      const initialMarketCount = await vpop.getMarketCount();
+      
+      const tx = await vpop.connect(owner).initializeMarket(
         ethers.ZeroAddress,
         0,
         100,
