@@ -13,12 +13,24 @@ async function main() {
   // Get the contract factory
   const VPOP = await ethers.getContractFactory("VPOP");
 
+  // Estimate gas for deployment
+  const deployTx = await VPOP.getDeployTransaction();
+  const estimatedGas = await ethers.provider.estimateGas(deployTx);
+  console.log("\nGas Estimation:");
+  console.log("Estimated gas for deployment:", estimatedGas.toString());
+
   // Deploy the contract
   const vpop = await VPOP.connect(deployer).deploy();
-  await vpop.waitForDeployment();
+  const deployReceipt = await vpop.waitForDeployment();
+  const deployTxReceipt = await deployReceipt.deploymentTransaction()?.wait();
+
+  console.log("\nDeployment Results:");
+  console.log("Actual gas used:", deployTxReceipt?.gasUsed.toString());
+  console.log("Gas price:", ethers.formatUnits(deployTxReceipt?.gasPrice || 0, "gwei"), "gwei");
+  console.log("Total deployment cost:", ethers.formatEther((deployTxReceipt?.gasUsed || 0n) * (deployTxReceipt?.gasPrice || 0n)), "ETH");
 
   const address = await vpop.getAddress();
-  console.log("VPOP deployed to:", address);
+  console.log("\nVPOP deployed to:", address);
 
   // Log initial settings
   const platformFeeRate = await vpop.platformFeeRate();
@@ -26,7 +38,7 @@ async function main() {
   const apeFeeRate = await vpop.apeFeeRate();
   const apeOwner = await vpop.apeOwner();
 
-  console.log("Initial settings:");
+  console.log("\nInitial settings:");
   console.log("Platform fee rate:", platformFeeRate.toString(), "basis points");
   console.log("Creator fee rate:", creatorFeeRate.toString(), "basis points");
   console.log("Ape fee rate:", apeFeeRate.toString(), "basis points");

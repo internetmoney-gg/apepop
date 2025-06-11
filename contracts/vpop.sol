@@ -123,14 +123,14 @@ contract VPOP is Ownable {
 
     /**
      * @dev Updates the fee rate. Only callable by the owner.
-     * @param _newPlatformFeeRate The new fee rate in basis points (1% = 100)
-     * @param _newCreatorFeeRate The new fee rate in basis points (1% = 100)
-     * @param _newApeFeeRate The new fee rate in basis points (1% = 100)
+     * @param _platformFeeRate The new fee rate in basis points (1% = 100)
+     * @param _creatorFeeRate The new fee rate in basis points (1% = 100)
+     * @param _apeFeeRate The new fee rate in basis points (1% = 100)
      */
-    function updatePlatformSettings(uint256 _newPlatformFeeRate, uint256 _newCreatorFeeRate, uint256 _newApeFeeRate, uint256 _marketCreateFee, bool _allowPublicMarkets) external onlyOwner {
-        platformFeeRate = _newPlatformFeeRate;
-        creatorFeeRate = _newCreatorFeeRate;
-        apeFeeRate = _newApeFeeRate;
+    function updatePlatformSettings(uint256 _platformFeeRate, uint256 _creatorFeeRate, uint256 _apeFeeRate, uint256 _marketCreateFee, bool _allowPublicMarkets) external onlyOwner {
+        platformFeeRate = _platformFeeRate;
+        creatorFeeRate = _creatorFeeRate;
+        apeFeeRate = _apeFeeRate;
         marketCreateFee = _marketCreateFee;
         allowPublicMarkets = _allowPublicMarkets;
     }
