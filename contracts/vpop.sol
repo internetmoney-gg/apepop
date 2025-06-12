@@ -21,6 +21,7 @@ contract VPOP is Ownable {
     struct Market {
         address creator;
         uint256 createdAt;
+        uint256 creationBlock;
         // Market parameters
         address token;
         uint256 lowerBound;
@@ -206,6 +207,7 @@ contract VPOP is Ownable {
         Market memory newMarket = Market({
             creator: msg.sender,
             createdAt: block.timestamp,
+            creationBlock: block.number,
             token: _token,
             lowerBound: _lowerBound,
             upperBound: _upperBound,
@@ -590,6 +592,12 @@ contract VPOP is Ownable {
         return markets[marketId];
     }
 
-
-   
+    /**
+     * @dev Returns a commitment by marketId and commitmentId
+     * @param marketId The ID of the market to check
+     * @param commitmentId the ID of the commitment to check
+     */
+    function getCommitment(uint256 marketId, uint256 commitmentId) public view returns (Commitment memory) {
+        return commitments[marketId][commitmentId];
+    }
 }
