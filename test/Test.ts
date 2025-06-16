@@ -145,6 +145,13 @@ async function createCommit({
   );
 }
 
+// === added helper =============================================
+// Generates a nonce that fits into uint64 (required by the contract)
+const randomNonce64 = (): bigint => {
+  // 8 random bytes -> 64-bit unsigned integer
+  return ethers.toBigInt(ethers.hexlify(ethers.randomBytes(8)));
+};
+
 describe("VPOP", function () {
   let vpop: any;
   let owner: any;
@@ -264,7 +271,7 @@ describe("VPOP", function () {
 
       // Create commitment parameters
       const position = 5000n; // 50%
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
 
       // Calculate the commitment hash
@@ -296,7 +303,7 @@ describe("VPOP", function () {
 
     it("Should fail when creating commitment for non-existent market", async function () {
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.01");
       const marketCount = await vpop.getMarketCount();
       const commitmentHash = createCommitmentHash(position, wager, nonce);
@@ -319,7 +326,7 @@ describe("VPOP", function () {
       });
 
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.05"); // Below minimum wager
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
@@ -342,7 +349,7 @@ describe("VPOP", function () {
       });
 
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
@@ -370,8 +377,8 @@ describe("VPOP", function () {
       // Create commitment parameters
       const position1 = 5000n;
       const position2 = 6000n;
-      const nonce1 = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
-      const nonce2 = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce1 = randomNonce64();
+      const nonce2 = randomNonce64();
       const wager = ethers.parseEther("0.5");
 
       // Calculate commitment hashes
@@ -491,7 +498,7 @@ describe("VPOP", function () {
 
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("1.0"); // 1 ETH wager
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
@@ -555,7 +562,7 @@ describe("VPOP", function () {
       
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
       // Get initial balances
@@ -606,7 +613,7 @@ describe("VPOP", function () {
       
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
 
       // Calculate the commitment hash
@@ -652,7 +659,7 @@ describe("VPOP", function () {
       
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
 
       // Calculate the commitment hash
@@ -688,7 +695,7 @@ describe("VPOP", function () {
       
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
 
       // Calculate the commitment hash
@@ -745,7 +752,7 @@ describe("VPOP", function () {
       
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
 
       // Calculate the commitment hash
@@ -785,7 +792,7 @@ describe("VPOP", function () {
       
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
 
       // Calculate the commitment hash
@@ -839,7 +846,7 @@ describe("VPOP", function () {
         ethers.parseEther("1"),
         ethers.parseEther("1")
       ];
-      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const nonces = positions.map(() => randomNonce64());
       const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
 
       // Submit all commitments
@@ -916,7 +923,7 @@ describe("VPOP", function () {
         ethers.parseEther("1"),
         ethers.parseEther("1")
       ];
-      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const nonces = positions.map(() => randomNonce64());
       const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
 
       // Move to reveal phase
@@ -1043,7 +1050,7 @@ describe("VPOP", function () {
         ethers.parseEther("1"),
         ethers.parseEther("1")
       ];
-      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const nonces = positions.map(() => randomNonce64());
       const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
 
       // Submit all commitments
@@ -1129,7 +1136,7 @@ describe("VPOP", function () {
         ethers.parseEther("2"),
         ethers.parseEther("1")
       ];
-      const nonces = positions.map(() => ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32))));
+      const nonces = positions.map(() => randomNonce64());
       const commitmentHashes = positions.map((pos, i) => createCommitmentHash(pos, wagers[i], nonces[i]));
 
       // Submit all commitments
@@ -1220,7 +1227,7 @@ describe("VPOP", function () {
 
       const position = 1500n;
       const wager = ethers.parseEther("1");
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
       const tx = await createCommit({
@@ -1261,7 +1268,7 @@ describe("VPOP", function () {
 
       const position = 1500n;
       const wager = ethers.parseEther("1");
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
       const tx = await createCommit({
@@ -1277,7 +1284,7 @@ describe("VPOP", function () {
 
       const position2 = 1600n;
       const wager2 = ethers.parseEther("1");
-      const nonce2 = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce2 = randomNonce64();
       const commitmentHash2 = createCommitmentHash(position2, wager2, nonce2);
 
       const tx2 = await createCommit({
@@ -1320,7 +1327,7 @@ describe("VPOP", function () {
       // Create commitment parameters
       const position = 500n;
       const wager = ethers.parseEther("1.0");
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
       // Create commitment as owner
@@ -1457,7 +1464,7 @@ describe("VPOP", function () {
       
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = ethers.parseEther("0.5");
       const commitmentHash = createCommitmentHash(position, wager, nonce);
       
@@ -1526,7 +1533,7 @@ describe("VPOP", function () {
 
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = 0n; // Zero wager
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 
@@ -1620,7 +1627,7 @@ describe("VPOP", function () {
       expect(contractBalance).to.equal(firstPrizeAmount + secondPrizeAmount);
       // Create commitment parameters
       const position = 5000n;
-      const nonce = ethers.toBigInt(ethers.hexlify(ethers.randomBytes(32)));
+      const nonce = randomNonce64();
       const wager = 0n; // Zero wager
       const commitmentHash = createCommitmentHash(position, wager, nonce);
 

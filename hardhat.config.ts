@@ -40,7 +40,7 @@ module.exports = {
       cors: true,
       chainId: 31337,
       gasPrice: 2000000000,
-      allowUnlimitedContractSize: true,      
+      allowUnlimitedContractSize: true,     
     },
     
     curtis: {
