@@ -15,7 +15,7 @@ contract VPOP is Ownable {
     uint256 public creatorFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public apeFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public marketCreateFee; // Fee rate in basis points (1% = 100)
-    address public apeOwner = 0x1000000000000000000000000000000000000000; // Address that receives ape fees
+    address public apeOwner = 0x5AC40A1175715F1c27e3FEAa8C79664040717679; // Address that receives ape fees
     bool private allowPublicMarkets;
     
     struct Market {
