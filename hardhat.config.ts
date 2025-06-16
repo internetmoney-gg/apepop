@@ -43,12 +43,12 @@ module.exports = {
       accounts: [process.env.CURTIS_PRIVATE_KEY],
     },
     
-    // apechain: {
-    //   url: "https://rpc.apechain.com",
-    //   // url: "https://apechain.drpc.org",
-    //   chainId: 33139,
-    //   accounts: [process.env.APECHAIN_PRIVATE_KEY],
-    // },
+    apechain: {
+      url: "https://rpc.apechain.com",
+      // url: "https://apechain.drpc.org",
+      chainId: 33139,
+      accounts: [process.env.APECHAIN_PRIVATE_KEY],
+    },
 
   },
   etherscan: {
