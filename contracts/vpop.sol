@@ -5,8 +5,6 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
-import "hardhat/console.sol";
-
 /**
  * @title VPOP
  */
@@ -19,50 +17,65 @@ contract VPOP is Ownable {
     bool private allowPublicMarkets;
     
     struct Market {
-        address creator;
-        uint256 createdAt;
-        uint256 creationBlock;
-        // Market parameters
-        address token;
-        uint256 lowerBound;
-        uint256 upperBound;
-        uint8 decimals;
-        uint256 minWager;
-        uint256 decayFactor;
-        uint256 commitDuration;
-        uint256 revealDuration;
-        uint16 winningPercentile;
-        string ipfsHash;
+        address creator;        // 20 bytes
+        uint32 createdAt;      // 4 bytes (timestamp, good until 2106)
+        uint32 creationBlock;  // 4 bytes (block number)
+        uint16 winningPercentile; // 2 bytes
+        uint16 decayFactor;    // 2 bytes (0-10000, fits in uint16)
+        // Slot 1: 32 bytes used
+
+        address token;         // 20 bytes
+        uint32 commitDuration; // 4 bytes (duration in seconds)
+        uint32 revealDuration; // 4 bytes
+        uint8 decimals;        // 1 byte
+        // Slot 2: 29 bytes used, 3 bytes left
+
+        uint64 lowerBound;     // 8 bytes
+        uint64 upperBound;     // 8 bytes
+        uint128 minWager;      // 16 bytes
+        // Slot 3: 32 bytes used
+
+        string ipfsHash;       // variable, separate slot(s)
     }
 
     struct MarketConsensus {
-        uint256 totalWagers;
-        uint256 totalWinnings;
-        // Market consensus tracking
-        uint256 totalWeight;
-        uint256 weightedSum;
-        // Market status
-        bool resolved;
-        // Commitment tracking
-        uint256 totalCommitments;
-        uint256 revealedCommitments;
-        // Resolution data
-        uint256 winningThreshold;
-        uint256 consensusPosition;
-        uint256 winningWagers; // Sum of wagers for winning positions
-        uint256 winningCommitments; // Count of winning positions
+        uint128 totalWagers;        // 16 bytes
+        uint128 totalWinnings;      // 16 bytes
+        // Slot 1: 32 bytes used
+        
+        uint128 totalWeight;        // 16 bytes
+        uint128 winningWagers;      // 16 bytes
+        // Slot 2: 32 bytes used
+        
+        uint256 weightedSum;        // 32 bytes (keep full size for accumulation safety)
+        // Slot 3: 32 bytes used
+        
+        uint64 consensusPosition;   // 8 bytes (position value)
+        uint64 winningThreshold;    // 8 bytes
+        uint32 totalCommitments;    // 4 bytes
+        uint32 revealedCommitments; // 4 bytes
+        uint32 winningCommitments;  // 4 bytes
+        bool resolved;              // 1 byte
+        // Slot 4: 29 bytes used, 3 bytes left
     }
 
     struct Commitment {
-        address owner;
-        bytes32 commitmentHash;
-        uint256 wager;
-        uint256 weight;
-        uint256 timestamp;
-        bool revealed;
-        uint256 position;
-        uint256 nonce;
-        bool claimed;
+        address owner;          // 20 bytes
+        uint32 timestamp;       // 4 bytes
+        uint64 position;        // 8 bytes
+        // Slot 1: 32 bytes used
+
+        bytes32 commitmentHash; // 32 bytes
+        // Slot 2: 32 bytes used
+
+        uint128 wager;          // 16 bytes
+        uint128 weight;         // 16 bytes
+        // Slot 3: 32 bytes used
+
+        uint64 nonce;           // 8 bytes
+        bool revealed;          // 1 byte
+        bool claimed;           // 1 byte
+        // Slot 4: 10 bytes used, 22 bytes left
     }
 
     // Mapping to store markets by their ID
@@ -152,7 +165,7 @@ contract VPOP is Ownable {
             require(msg.value == additionalWinnings, "Sent value must match additional winnings");
         }
         
-        marketConsensus[marketId].totalWinnings += additionalWinnings;
+        marketConsensus[marketId].totalWinnings += uint128(additionalWinnings);
     }
 
     /**
@@ -206,17 +219,17 @@ contract VPOP is Ownable {
 
         Market memory newMarket = Market({
             creator: msg.sender,
-            createdAt: block.timestamp,
-            creationBlock: block.number,
-            token: _token,
-            lowerBound: _lowerBound,
-            upperBound: _upperBound,
-            decimals: _decimals,
-            minWager: _minWager,
-            decayFactor: _decayFactor,
-            commitDuration: _commitDuration,
-            revealDuration: _revealDuration,
+            createdAt: uint32(block.timestamp),
+            creationBlock: uint32(block.number),
             winningPercentile: _winningPercentile,
+            decayFactor: _decayFactor,
+            token: _token,
+            commitDuration: uint32(_commitDuration),
+            revealDuration: uint32(_revealDuration),
+            decimals: _decimals,
+            lowerBound: uint64(_lowerBound),
+            upperBound: uint64(_upperBound),
+            minWager: uint128(_minWager),
             ipfsHash: _ipfsHash
         });
 
@@ -295,7 +308,7 @@ contract VPOP is Ownable {
             uint256 apeFee = (wager * apeFeeRate) / 10000;
             // Add to the pot 
             uint256 winnings = wager - platformFee - creatorFee - apeFee;
-            marketConsensus[marketId].totalWinnings += winnings;
+            marketConsensus[marketId].totalWinnings += uint128(winnings);
 
             // Check if the market uses native token or ERC20
             if (market.token == address(0)) {
@@ -338,7 +351,7 @@ contract VPOP is Ownable {
                 );
             }
         }
-        marketConsensus[marketId].totalWagers += wager;
+        marketConsensus[marketId].totalWagers += uint128(wager);
         // Calculate weight
         // uint256 weight = wager * (10000 - market.decayFactor) * ((block.timestamp - market.createdAt)*10000 / market.commitDuration) / 100;
         uint256 weight = wager - (wager * market.decayFactor * ((block.timestamp - market.createdAt) * 10000 / market.commitDuration) / 10000 / 10000);
@@ -353,13 +366,13 @@ contract VPOP is Ownable {
         // Store the commitment
         commitments[marketId][commitmentId] = Commitment({
             owner: msg.sender,
-            commitmentHash: commitmentHash,
-            wager: wager,
-            weight: weight,
-            timestamp: block.timestamp,
-            revealed: false,
+            timestamp: uint32(block.timestamp),
             position: 0, // Will be set during reveal
+            commitmentHash: commitmentHash,
+            wager: uint128(wager),
+            weight: uint128(weight),
             nonce: 0,    // Will be set during reveal
+            revealed: false,
             claimed: false
         });
 
@@ -417,12 +430,12 @@ contract VPOP is Ownable {
         // Update market consensus
         marketConsensus[marketId].totalWeight += commitment.weight;
         marketConsensus[marketId].weightedSum += position * commitment.weight;
-        marketConsensus[marketId].consensusPosition = marketConsensus[marketId].weightedSum / marketConsensus[marketId].totalWeight;
+        marketConsensus[marketId].consensusPosition = uint64(marketConsensus[marketId].weightedSum / marketConsensus[marketId].totalWeight);
         marketConsensus[marketId].revealedCommitments++;
         
         // Mark commitment as revealed and increment revealed counter
         commitment.revealed = true;
-        commitment.position = position;
+        commitment.position = uint64(position);
 
         emit CommitmentRevealed(
             marketId,
@@ -459,7 +472,7 @@ contract VPOP is Ownable {
         
         // Calculate market consensus position
         if (consensus.totalWeight > 0) { // Avoid division by zero if no weights (e.g., all reveals failed, though unlikely here)
-            consensus.consensusPosition = consensus.weightedSum / consensus.totalWeight;
+            consensus.consensusPosition = uint64(consensus.weightedSum / consensus.totalWeight);
         } else {
              revert("No weight in consensus, cannot determine consensus position");
         }
@@ -503,7 +516,7 @@ contract VPOP is Ownable {
         require(numStrictlyBelowPWT < targetRank, "PWT too high or non-existent rank");
         require(numAtOrBelowPWT >= targetRank, "PWT too low or non-existent rank");
 
-        consensus.winningThreshold = proposedWinningThreshold;
+        consensus.winningThreshold = uint64(proposedWinningThreshold);
         // Mark market as resolved
         consensus.resolved = true;
     }
@@ -590,14 +603,5 @@ contract VPOP is Ownable {
      */
     function getMarket(uint256 marketId) public view returns (Market memory) {
         return markets[marketId];
-    }
-
-    /**
-     * @dev Returns a commitment by marketId and commitmentId
-     * @param marketId The ID of the market to check
-     * @param commitmentId the ID of the commitment to check
-     */
-    function getCommitment(uint256 marketId, uint256 commitmentId) public view returns (Commitment memory) {
-        return commitments[marketId][commitmentId];
     }
 }
