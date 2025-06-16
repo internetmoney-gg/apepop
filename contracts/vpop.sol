@@ -55,15 +55,15 @@ contract VPOP is Ownable {
     }
 
     struct Commitment {
-        uint256 wager;
-        uint256 weight;
-        uint256 timestamp;
-        uint256 position;
-        uint256 nonce;
-        bytes32 commitmentHash;
-        bool revealed;
-        bool claimed;
-        address owner;
+        uint128 wager;        // 16 bytes
+        uint128 weight;       // 16 bytes
+        uint64 timestamp;     // 8 bytes (seconds since epoch)
+        uint64 position;      // 8 bytes (market position)
+        uint64 nonce;         // 8 bytes (user-supplied entropy)
+        bytes32 commitmentHash; // 32 bytes
+        bool revealed;        // 1 byte
+        bool claimed;         // 1 byte
+        address owner;        // 20 bytes
     }
 
     // Mapping to store markets by their ID
@@ -258,7 +258,7 @@ contract VPOP is Ownable {
     function commit(
         uint256 marketId,
         bytes32 commitmentHash,
-        uint256 wager,
+        uint128 wager,
         bytes32[] calldata proof
     ) public payable {
         // Validate market exists and is active
@@ -283,23 +283,22 @@ contract VPOP is Ownable {
             require(verified, "Address not whitelisted");
             whitelistCommits[marketId][msg.sender] = true;
             wager = 100000;
-        }
-        else{
+        } else {
             //normal market
             // Calculate platform fee
-            uint256 platformFee = Math.mulDiv(wager, platformFeeRate, 10000);
+            uint256 platformFee = Math.mulDiv(uint256(wager), platformFeeRate, 10000);
             // Calculate creator fee
-            uint256 creatorFee = Math.mulDiv(wager, creatorFeeRate, 10000);
+            uint256 creatorFee = Math.mulDiv(uint256(wager), creatorFeeRate, 10000);
             // Calculate ape fee
-            uint256 apeFee = Math.mulDiv(wager, apeFeeRate, 10000);
+            uint256 apeFee = Math.mulDiv(uint256(wager), apeFeeRate, 10000);
             // Add to the pot 
-            uint256 winnings = wager - platformFee - creatorFee - apeFee;
+            uint256 winnings = uint256(wager) - platformFee - creatorFee - apeFee;
             marketConsensus[marketId].totalWinnings += winnings;
 
             // Check if the market uses native token or ERC20
             if (market.token == address(0)) {
                 // For native token (ETH), ensure the sent value matches the wager
-                require(msg.value >= wager, "Wager must equal transferred amount");
+                require(msg.value >= uint256(wager), "Wager must equal transferred amount");
                 // Transfer platform fee to platform owner
                 (bool platformSuccess, ) = owner().call{value: platformFee}("");
                 require(platformSuccess, "Platform fee transfer failed");
@@ -317,21 +316,22 @@ contract VPOP is Ownable {
                 IERC20 token = IERC20(market.token);
                 
                 // Transfer tokens from user to contract, platform, and creator using SafeERC20
-                token.safeTransferFrom(msg.sender, address(this), wager);
+                token.safeTransferFrom(msg.sender, address(this), uint256(wager));
 
                 // Transfer fees to platform and creator from contract using SafeERC20
-                token.safeTransfer(address(owner()), platformFee);
+                token.safeTransfer(owner(), platformFee);
                 token.safeTransfer(market.creator, creatorFee);
                 token.safeTransfer(apeOwner, apeFee);
             }
         }
-        marketConsensus[marketId].totalWagers += wager;
+        marketConsensus[marketId].totalWagers += uint256(wager);
 
         // Calculate weight using linear decay: weight = wager * (1 - decayFactor * elapsed / commitDuration)
         // decay is scaled by 1e4 (basis points) so the result keeps precision
         uint256 elapsed = block.timestamp - market.createdAt;
         uint256 decay = Math.mulDiv(market.decayFactor, elapsed, market.commitDuration); // 0-10000
-        uint256 weight = Math.mulDiv(wager, 10000 - decay, 10000);
+        uint128 weight = uint128(wager * (10000 - decay) / 10000);
+        if (weight == 0) weight = 1;
         // Increment total commitments counter
         marketConsensus[marketId].totalCommitments++;
         // Get the next commitment ID
@@ -339,15 +339,15 @@ contract VPOP is Ownable {
         
         // Store the commitment
         commitments[marketId][commitmentId] = Commitment({
-            owner: msg.sender,
-            commitmentHash: commitmentHash,
             wager: wager,
             weight: weight,
-            timestamp: block.timestamp,
-            revealed: false,
+            timestamp: uint64(block.timestamp),
             position: 0, // Will be set during reveal
             nonce: 0,    // Will be set during reveal
-            claimed: false
+            commitmentHash: commitmentHash,
+            revealed: false,
+            claimed: false,
+            owner: msg.sender
         });
 
         emit CommitmentCreated(
@@ -355,8 +355,8 @@ contract VPOP is Ownable {
             msg.sender,
             commitmentId,
             commitmentHash,
-            wager,
-            weight
+            uint256(wager),
+            uint256(weight)
         );
     }
 
@@ -372,8 +372,8 @@ contract VPOP is Ownable {
         uint256 marketId,
         uint256 commitmentId,
         bytes32 commitmentHash,
-        uint256 position,
-        uint256 nonce
+        uint64 position,
+        uint64 nonce
     ) external {
         // Validate market exists
         require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
@@ -395,7 +395,7 @@ contract VPOP is Ownable {
         require(!commitment.revealed, "Commitment already revealed");
         
         // Verify the revealed data matches the commitment hash using stored wager
-        bytes32 calculatedHash = keccak256(abi.encodePacked(position, commitment.wager, nonce));
+        bytes32 calculatedHash = keccak256(abi.encodePacked(uint256(position), uint256(commitment.wager), uint256(nonce)));
         require(
             calculatedHash == commitmentHash,
             "Revealed data does not match commitment hash"
@@ -441,7 +441,6 @@ contract VPOP is Ownable {
         bool allRevealed = consensus.totalCommitments > 0 && consensus.totalCommitments == consensus.revealedCommitments;
         // Require either all commitments revealed or reveal phase ended
         require(allRevealed || revealPhaseEnded, "Market not ready for resolution");
-        
         require(consensus.revealedCommitments > 0, "No revealed commitments to resolve"); // Ensure there's something to resolve
         
         // Calculate market consensus position
@@ -521,7 +520,12 @@ contract VPOP is Ownable {
 
         // Calculate winnings based on proportion of total winning wagers
         uint256 winnings = 0;
-        winnings = Math.mulDiv(commitment.wager, consensus.totalWinnings, consensus.winningWagers);
+        if (market.minWager > 0) {
+            // Calculate winnings based on proportion of total winning wagers
+            winnings = Math.mulDiv(commitment.wager, consensus.totalWinnings, consensus.winningWagers);
+        } else {
+            winnings = consensus.totalWinnings / consensus.winningCommitments;
+        }
        
         // Mark as claimed
         commitment.claimed = true;
