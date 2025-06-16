@@ -546,35 +546,35 @@ contract VPOP is Ownable {
     //==//==//==//==//==//== public helper functions //==//==//==//==//==//==
     //==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==
 
-    /**
-     * @dev Returns whether a position is a winning position
-     * @param marketId The ID of the market
-     * @param position The position to check
-     * @return bool True if the position is a winning position
-     */
-    function isWinningPosition(uint256 marketId, uint256 position) public view returns (bool) {
-        MarketConsensus storage consensus = marketConsensus[marketId];
-        require(consensus.resolved, "Market not resolved");
+    // /**
+    //  * @dev Returns whether a position is a winning position
+    //  * @param marketId The ID of the market
+    //  * @param position The position to check
+    //  * @return bool True if the position is a winning position
+    //  */
+    // function isWinningPosition(uint256 marketId, uint256 position) public view returns (bool) {
+    //     MarketConsensus storage consensus = marketConsensus[marketId];
+    //     require(consensus.resolved, "Market not resolved");
         
-        uint256 distance = position > consensus.consensusPosition ? 
-            position - consensus.consensusPosition : 
-            consensus.consensusPosition - position;
+    //     uint256 distance = position > consensus.consensusPosition ? 
+    //         position - consensus.consensusPosition : 
+    //         consensus.consensusPosition - position;
             
-        return distance <= consensus.winningThreshold;
-    }
+    //     return distance <= consensus.winningThreshold;
+    // }
 
-    /**
-     * @dev Returns the total number of markets
-     */
-    function getMarketCount() public view returns (uint256) {
-        return _marketIdCounter;
-    }
+    // /**
+    //  * @dev Returns the total number of markets
+    //  */
+    // function getMarketCount() public view returns (uint256) {
+    //     return _marketIdCounter;
+    // }
 
-    /**
-     * @dev Returns a a market by its ID
-     * @param marketId The ID of the market to check
-     */
-    function getMarket(uint256 marketId) public view returns (Market memory) {
-        return markets[marketId];
-    }
+    // /**
+    //  * @dev Returns a a market by its ID
+    //  * @param marketId The ID of the market to check
+    //  */
+    // function getMarket(uint256 marketId) public view returns (Market memory) {
+    //     return markets[marketId];
+    // }
 }
