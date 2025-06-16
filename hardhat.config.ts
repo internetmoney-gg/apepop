@@ -23,7 +23,13 @@ require("dotenv").config();
 
 /** @type import('hardhat/config').HardhatUserConfig */
 module.exports = {
-  solidity: "0.8.28",
+  solidity: {
+    version: "0.8.28",
+    settings: {
+      optimizer: { enabled: true, runs: 200 },
+      viaIR: true
+    }
+  },
   // allowUnlimitedContractSize: true,
   networks: {
     localhost: {
@@ -34,21 +40,21 @@ module.exports = {
       cors: true,
       chainId: 31337,
       gasPrice: 2000000000,
-      allowUnlimitedContractSize: true,      
+      allowUnlimitedContractSize: true,     
     },
     
-    curtis: {
-      url: "https://curtis.rpc.caldera.xyz/http",
-      chainId: 33111,
-      accounts: [process.env.CURTIS_PRIVATE_KEY],
-    },
+    // curtis: {
+    //   url: "https://curtis.rpc.caldera.xyz/http",
+    //   chainId: 33111,
+    //   accounts: [process.env.CURTIS_PRIVATE_KEY],
+    // },
     
-    apechain: {
-      url: "https://rpc.apechain.com",
-      // url: "https://apechain.drpc.org",
-      chainId: 33139,
-      accounts: [process.env.APECHAIN_PRIVATE_KEY],
-    },
+    // apechain: {
+    //   url: "https://rpc.apechain.com",
+    //   // url: "https://apechain.drpc.org",
+    //   chainId: 33139,
+    //   accounts: [process.env.APECHAIN_PRIVATE_KEY],
+    // },
 
   },
   etherscan: {

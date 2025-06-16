@@ -3,14 +3,15 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
-
-import "hardhat/console.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
 /**
  * @title VPOP
  */
 contract VPOP is Ownable {
+    using SafeERC20 for IERC20;
     uint256 public platformFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public creatorFeeRate; // Fee rate in basis points (1% = 100)
     uint256 public apeFeeRate; // Fee rate in basis points (1% = 100)
@@ -54,15 +55,15 @@ contract VPOP is Ownable {
     }
 
     struct Commitment {
-        address owner;
-        bytes32 commitmentHash;
         uint256 wager;
         uint256 weight;
         uint256 timestamp;
-        bool revealed;
         uint256 position;
         uint256 nonce;
+        bytes32 commitmentHash;
+        bool revealed;
         bool claimed;
+        address owner;
     }
 
     // Mapping to store markets by their ID
@@ -146,7 +147,7 @@ contract VPOP is Ownable {
         
         if (market.token != address(0)) {
             // ERC20 token transfer
-            IERC20(market.token).transferFrom(msg.sender, address(this), additionalWinnings);
+            IERC20(market.token).safeTransferFrom(msg.sender, address(this), additionalWinnings);
         } else {
             // ETH transfer
             require(msg.value == additionalWinnings, "Sent value must match additional winnings");
@@ -180,11 +181,9 @@ contract VPOP is Ownable {
         uint256 _revealDuration,
         uint16 _winningPercentile,
         string memory _ipfsHash
-    ) public payable returns (uint256 marketId) {
-        if(allowPublicMarkets == false){
-            require(msg.sender == owner(), "Only owner can create markets");
-        }
+    ) public payable returns (uint256 marketId) {        
         // Input validation
+        require(allowPublicMarkets == true || msg.sender == owner(), "Only owner can create markets");
         require(_lowerBound < _upperBound, "Lower bound must be less than upper bound");
         require(_decimals <= 18, "Decimals must be <= 18");
         require(_minWager >= 0, "Minimum wager must be greater than 0");
@@ -288,11 +287,11 @@ contract VPOP is Ownable {
         else{
             //normal market
             // Calculate platform fee
-            uint256 platformFee = (wager * platformFeeRate) / 10000;
+            uint256 platformFee = Math.mulDiv(wager, platformFeeRate, 10000);
             // Calculate creator fee
-            uint256 creatorFee = (wager * creatorFeeRate) / 10000;
+            uint256 creatorFee = Math.mulDiv(wager, creatorFeeRate, 10000);
             // Calculate ape fee
-            uint256 apeFee = (wager * apeFeeRate) / 10000;
+            uint256 apeFee = Math.mulDiv(wager, apeFeeRate, 10000);
             // Add to the pot 
             uint256 winnings = wager - platformFee - creatorFee - apeFee;
             marketConsensus[marketId].totalWinnings += winnings;
@@ -317,34 +316,22 @@ contract VPOP is Ownable {
                 // Transfer ERC20 tokens from user to contract
                 IERC20 token = IERC20(market.token);
                 
-                // Transfer tokens from user to contract, platform, and creator
-                require(
-                    token.transferFrom(msg.sender, address(this), wager),
-                    "Token transfer failed - insufficient balance or allowance"
-                );
+                // Transfer tokens from user to contract, platform, and creator using SafeERC20
+                token.safeTransferFrom(msg.sender, address(this), wager);
 
-                // Transfer fees to platform and creator from contract
-                require(
-                    token.transfer(address(owner()), platformFee),
-                    "Platform fee transfer failed"
-                );
-                require(
-                    token.transfer(market.creator, creatorFee),
-                    "Creator fee transfer failed"
-                );
-                require(
-                    token.transfer(apeOwner, apeFee),
-                    "Ape fee transfer failed"
-                );
+                // Transfer fees to platform and creator from contract using SafeERC20
+                token.safeTransfer(address(owner()), platformFee);
+                token.safeTransfer(market.creator, creatorFee);
+                token.safeTransfer(apeOwner, apeFee);
             }
         }
         marketConsensus[marketId].totalWagers += wager;
-        // Calculate weight
-        // uint256 weight = wager * (10000 - market.decayFactor) * ((block.timestamp - market.createdAt)*10000 / market.commitDuration) / 100;
-        uint256 weight = wager - (wager * market.decayFactor * ((block.timestamp - market.createdAt) * 10000 / market.commitDuration) / 10000 / 10000);
-        if(weight <= 0){
-            weight = 1;
-        }
+
+        // Calculate weight using linear decay: weight = wager * (1 - decayFactor * elapsed / commitDuration)
+        // decay is scaled by 1e4 (basis points) so the result keeps precision
+        uint256 elapsed = block.timestamp - market.createdAt;
+        uint256 decay = Math.mulDiv(market.decayFactor, elapsed, market.commitDuration); // 0-10000
+        uint256 weight = Math.mulDiv(wager, 10000 - decay, 10000);
         // Increment total commitments counter
         marketConsensus[marketId].totalCommitments++;
         // Get the next commitment ID
@@ -469,7 +456,7 @@ contract VPOP is Ownable {
 
         // Calculate targetRank: ceil((winningPercentile * revealedCommitmentCount) / 10000)
         // (A * B + D-1) / D for ceil(A*B/D)
-        targetRank = (uint256(market.winningPercentile) * revealedCommitmentCount + (10000 - 1)) / 10000;
+        targetRank = Math.mulDiv(market.winningPercentile, revealedCommitmentCount, 10000, Math.Rounding.Ceil);
         if (targetRank == 0 && revealedCommitmentCount > 0) { // Ensure at least 1 winner if percentile > 0 and commitments exist
             targetRank = 1;
         }
@@ -532,14 +519,9 @@ contract VPOP is Ownable {
 
         Market storage market = markets[marketId];
 
+        // Calculate winnings based on proportion of total winning wagers
         uint256 winnings = 0;
-        if(market.minWager > 0){
-            // Calculate winnings based on proportion of total winning wagers
-            winnings = (commitment.wager * consensus.totalWinnings) / consensus.winningWagers;
-        }
-        else{
-            winnings = consensus.totalWinnings / consensus.winningCommitments;
-        }
+        winnings = Math.mulDiv(commitment.wager, consensus.totalWinnings, consensus.winningWagers);
        
         // Mark as claimed
         commitment.claimed = true;
@@ -550,7 +532,7 @@ contract VPOP is Ownable {
             require(success, "Transfer failed");
         } else {
             IERC20 token = IERC20(market.token);
-            require(token.transfer(commitment.owner, winnings), "Token transfer failed");
+            token.safeTransfer(commitment.owner, winnings);
         }
         
         emit WinningsClaimed(marketId, msg.sender, commitmentId, winnings);
@@ -590,14 +572,5 @@ contract VPOP is Ownable {
      */
     function getMarket(uint256 marketId) public view returns (Market memory) {
         return markets[marketId];
-    }
-
-    /**
-     * @dev Returns a commitment by marketId and commitmentId
-     * @param marketId The ID of the market to check
-     * @param commitmentId the ID of the commitment to check
-     */
-    function getCommitment(uint256 marketId, uint256 commitmentId) public view returns (Commitment memory) {
-        return commitments[marketId][commitmentId];
     }
 }
