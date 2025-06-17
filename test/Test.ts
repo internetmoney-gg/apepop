@@ -158,7 +158,7 @@ describe("VPOP", function () {
   let otherAccount: any;
   let thirdAccount: any;
   let testToken: TestToken;
-  const apeAddress = "0x1000000000000000000000000000000000000000";
+  const apeAddress = "0x5AC40A1175715F1c27e3FEAa8C79664040717679";
   before(async function() {
     const [ownerSigner, otherAccountSigner, thirdAccountSigner] = await hre.ethers.getSigners();
     owner = ownerSigner;
