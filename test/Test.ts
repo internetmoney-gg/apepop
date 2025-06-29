@@ -134,7 +134,7 @@ async function createCommit({
   proof?: string[],
   valueOverride?: any
 }) {
-  const commitmentHash = createCommitmentHash(position, wager, nonce);
+  const commitmentHash = createCommitmentHash(position, proof.length == 0 ? wager : 100000n, nonce);
   const value = valueOverride !== undefined ? valueOverride : { value: wager };
   return vpopContract.connect(signer).commit(
     marketId,
@@ -1512,6 +1512,21 @@ describe("VPOP", function () {
         ipfsHash: "QmTest123"
       });
 
+      // Create a whitelist with the participating addresses
+      const addresses = [owner.address, otherAccount.address];
+      const leaves = addresses.map(addr => 
+        ethers.keccak256(ethers.solidityPacked(["address"], [addr]))
+      );
+
+      // Construct Merkle Tree
+      const tree = new MerkleTree(leaves, ethers.keccak256, {
+        sortPairs: true,
+      });
+
+      // Get root and set whitelist
+      const root = tree.getHexRoot();
+      await vpop.updateWhitelistRoot(marketId, root);
+
       // Fund the market with ETH in multiple steps
       const firstPrizeAmount = ethers.parseEther("1.0");
       const secondPrizeAmount = ethers.parseEther("2.0");
@@ -1534,24 +1549,31 @@ describe("VPOP", function () {
       // Create commitment parameters
       const position = 5000n;
       const nonce = randomNonce64();
-      const wager = 0n; // Zero wager
-      const commitmentHash = createCommitmentHash(position, wager, nonce);
+      const wager = 0n; // Zero wager for market initialization
+      const whitelistWager = 100000n; // Contract overrides wager to this value for whitelisted markets
+      // For whitelisted markets, hash must be calculated with the overridden wager since that's what gets stored
+      const commitmentHash = createCommitmentHash(position, whitelistWager, nonce);
 
-      // Create commitment with zero wager
+      // Create proof for whitelist
+      const leaf = ethers.keccak256(ethers.solidityPacked(["address"], [owner.address]));
+      const proof = tree.getHexProof(leaf);
+
+      // Create commitment with zero wager and whitelist proof
       const tx = await createCommit({
         vpopContract: vpop,
         marketId: marketId,
         signer: owner,
         position,
         wager,
-        nonce
+        nonce,
+        proof
       });
       const receipt = await tx.wait();
 
       // Move to reveal phase
       await time.increase(3601);
 
-      // Reveal commitment
+      // Reveal commitment (use whitelistWager since that's what the contract stored)
       await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Verify commitment was revealed
@@ -1596,6 +1618,21 @@ describe("VPOP", function () {
         ipfsHash: "QmTest123"
       });
 
+      // Create a whitelist with the participating addresses
+      const addresses = [owner.address, otherAccount.address];
+      const leaves = addresses.map(addr => 
+        ethers.keccak256(ethers.solidityPacked(["address"], [addr]))
+      );
+
+      // Construct Merkle Tree
+      const tree = new MerkleTree(leaves, ethers.keccak256, {
+        sortPairs: true,
+      });
+
+      // Get root and set whitelist
+      const root = tree.getHexRoot();
+      await vpop.updateWhitelistRoot(marketId, root);
+
       // Fund the market with tokens in multiple steps
       const firstPrizeAmount = ethers.parseEther("1.0");
       const secondPrizeAmount = ethers.parseEther("2.0");
@@ -1625,20 +1662,28 @@ describe("VPOP", function () {
       // Check contract's token balance
       const contractBalance = await testToken.balanceOf(await vpop.getAddress());
       expect(contractBalance).to.equal(firstPrizeAmount + secondPrizeAmount);
+      
       // Create commitment parameters
       const position = 5000n;
       const nonce = randomNonce64();
-      const wager = 0n; // Zero wager
-      const commitmentHash = createCommitmentHash(position, wager, nonce);
+      const wager = 0n; // Zero wager for market initialization
+      const whitelistWager = 100000n; // Contract overrides wager to this value for whitelisted markets
+      // For whitelisted markets, hash must be calculated with the overridden wager since that's what gets stored
+      const commitmentHash = createCommitmentHash(position, whitelistWager, nonce);
 
-      // Create commitment with zero wager
+      // Create proof for whitelist
+      const leaf = ethers.keccak256(ethers.solidityPacked(["address"], [owner.address]));
+      const proof = tree.getHexProof(leaf);
+
+      // Create commitment with zero wager and whitelist proof
       const tx = await createCommit({
         vpopContract: vpop,
         marketId: marketId,
         signer: owner,
         position,
         wager,
-        nonce
+        nonce,
+        proof
       });
       const receipt = await tx.wait();
 
@@ -1649,7 +1694,7 @@ describe("VPOP", function () {
       // Move to reveal phase
       await time.increase(3601);
 
-      // Reveal commitment
+      // Reveal commitment (use whitelistWager since that's what the contract stored)
       await vpop.reveal(marketId, 1, commitmentHash, position, nonce);
 
       // Move to resolution phase

@@ -114,7 +114,7 @@ contract VPOP is Ownable {
         uint256 amount
     );
 
-    constructor() payable Ownable(msg.sender) {
+    constructor() Ownable(msg.sender) {
         _marketIdCounter = 0;
         platformFeeRate = 800; // 8% in basis points (1000 = 10%)
         creatorFeeRate = 200; // 2% in basis points (1000 = 10%)
@@ -147,6 +147,7 @@ contract VPOP is Ownable {
         
         if (market.token != address(0)) {
             // ERC20 token transfer
+            require(msg.value == 0, "No ETH needed for ERC20 markets");
             IERC20(market.token).safeTransferFrom(msg.sender, address(this), additionalWinnings);
         } else {
             // ETH transfer
@@ -189,7 +190,7 @@ contract VPOP is Ownable {
         require(_minWager >= 0, "Minimum wager must be greater than 0");
         require(_decayFactor <= 10000, "Decay factor must be <= 10000 (100%)");
         require(_commitDuration > 0, "Commit duration must be greater than 0");
-        require(_revealDuration > 0, "Reveal duration must be greater than 0");
+        require(_revealDuration >= 1800, "Reveal duration must be at least 30 minutes (1800 seconds)");
         require(_winningPercentile <= 10000, "Winning Percentile must be <= 10000 (100%)");
         require(bytes(_ipfsHash).length > 0, "IPFS hash cannot be empty");
 
@@ -197,6 +198,13 @@ contract VPOP is Ownable {
             require(msg.value >= marketCreateFee, "Market create fee not met");
             (bool success, ) = owner().call{value: marketCreateFee}("");
             require(success, "Market create fee transfer failed");
+            
+            // Refund excess payment
+            uint256 excess = msg.value - marketCreateFee;
+            if (excess > 0) {
+                (bool refundSuccess, ) = msg.sender.call{value: excess}("");
+                require(refundSuccess, "Excess refund failed");
+            }
         }
         
         // Get the next market ID and increment the counter
@@ -285,20 +293,21 @@ contract VPOP is Ownable {
             wager = 100000;
         } else {
             //normal market
-            // Calculate platform fee
-            uint256 platformFee = Math.mulDiv(uint256(wager), platformFeeRate, 10000);
-            // Calculate creator fee
-            uint256 creatorFee = Math.mulDiv(uint256(wager), creatorFeeRate, 10000);
-            // Calculate ape fee
-            uint256 apeFee = Math.mulDiv(uint256(wager), apeFeeRate, 10000);
-            // Add to the pot 
-            uint256 winnings = uint256(wager) - platformFee - creatorFee - apeFee;
-            marketConsensus[marketId].totalWinnings += winnings;
-
             // Check if the market uses native token or ERC20
             if (market.token == address(0)) {
                 // For native token (ETH), ensure the sent value matches the wager
-                require(msg.value >= uint256(wager), "Wager must equal transferred amount");
+                require(msg.value == uint256(wager), "Wager must equal transferred amount");
+                
+                // Calculate platform fee
+                uint256 platformFee = Math.mulDiv(uint256(wager), platformFeeRate, 10000);
+                // Calculate creator fee
+                uint256 creatorFee = Math.mulDiv(uint256(wager), creatorFeeRate, 10000);
+                // Calculate ape fee
+                uint256 apeFee = Math.mulDiv(uint256(wager), apeFeeRate, 10000);
+                // Add to the pot 
+                uint256 winnings = uint256(wager) - platformFee - creatorFee - apeFee;
+                marketConsensus[marketId].totalWinnings += winnings;
+                
                 // Transfer platform fee to platform owner
                 (bool platformSuccess, ) = owner().call{value: platformFee}("");
                 require(platformSuccess, "Platform fee transfer failed");
@@ -312,11 +321,27 @@ contract VPOP is Ownable {
                 require(apeSuccess, "Ape fee transfer failed");
 
             } else {
-                // Transfer ERC20 tokens from user to contract
+                // Handle ERC20 tokens with potential transfer fees
                 IERC20 token = IERC20(market.token);
                 
-                // Transfer tokens from user to contract, platform, and creator using SafeERC20
+                // Check balance before transfer to handle fee-on-transfer tokens
+                uint256 balanceBefore = token.balanceOf(address(this));
+                
+                // Transfer tokens from user to contract
                 token.safeTransferFrom(msg.sender, address(this), uint256(wager));
+                
+                // Check balance after transfer to determine actual received amount
+                uint256 balanceAfter = token.balanceOf(address(this));
+                uint256 actualReceived = balanceAfter - balanceBefore;
+                
+                // Calculate fees based on actual received amount
+                uint256 platformFee = Math.mulDiv(actualReceived, platformFeeRate, 10000);
+                uint256 creatorFee = Math.mulDiv(actualReceived, creatorFeeRate, 10000);
+                uint256 apeFee = Math.mulDiv(actualReceived, apeFeeRate, 10000);
+                
+                // Add remaining amount to the pot after fees
+                uint256 winnings = actualReceived - platformFee - creatorFee - apeFee;
+                marketConsensus[marketId].totalWinnings += winnings;
 
                 // Transfer fees to platform and creator from contract using SafeERC20
                 token.safeTransfer(owner(), platformFee);
@@ -425,6 +450,16 @@ contract VPOP is Ownable {
     /**
      * @dev Resolves a market after checking reveal status
      * @param marketId The ID of the market to resolve
+     * example:
+     * [1,1,1,2,2,3,4,5] = sorted distances
+     * winning percentile = 50%
+     * targetRank = 4
+     * PWT = 2
+     * numStrictlyBelowPWT = 3
+     * numAtOrBelowPWT = 5
+     * proposedWinningThreshold = 2
+     * consensus.winningThreshold = 2
+     * consensus.resolved = true
      */
     function resolve(uint256 marketId, uint256 proposedWinningThreshold) external {
         // Validate market exists
@@ -518,13 +553,14 @@ contract VPOP is Ownable {
 
         Market storage market = markets[marketId];
 
-        // Calculate winnings based on proportion of total winning wagers
+        // Calculate winnings based on market type
         uint256 winnings = 0;
-        if (market.minWager > 0) {
-            // Calculate winnings based on proportion of total winning wagers
-            winnings = Math.mulDiv(commitment.wager, consensus.totalWinnings, consensus.winningWagers);
-        } else {
+        if (whitelistRoots[marketId] != bytes32(0)) {
+            // Whitelisted market - equal distribution
             winnings = consensus.totalWinnings / consensus.winningCommitments;
+        } else {
+            // Non-whitelisted market - proportional distribution based on wagers
+            winnings = Math.mulDiv(commitment.wager, consensus.totalWinnings, consensus.winningWagers);
         }
        
         // Mark as claimed
@@ -546,35 +582,35 @@ contract VPOP is Ownable {
     // //==//==//==//==//==//== public helper functions //==//==//==//==//==//==
     // //==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==//==
 
-    // /**
-    //  * @dev Returns whether a position is a winning position
-    //  * @param marketId The ID of the market
-    //  * @param position The position to check
-    //  * @return bool True if the position is a winning position
-    //  */
-    // function isWinningPosition(uint256 marketId, uint256 position) public view returns (bool) {
-    //     MarketConsensus storage consensus = marketConsensus[marketId];
-    //     require(consensus.resolved, "Market not resolved");
+    /**
+     * @dev Returns whether a position is a winning position
+     * @param marketId The ID of the market
+     * @param position The position to check
+     * @return bool True if the position is a winning position
+     */
+    function isWinningPosition(uint256 marketId, uint256 position) public view returns (bool) {
+        MarketConsensus storage consensus = marketConsensus[marketId];
+        require(consensus.resolved, "Market not resolved");
         
-    //     uint256 distance = position > consensus.consensusPosition ? 
-    //         position - consensus.consensusPosition : 
-    //         consensus.consensusPosition - position;
+        uint256 distance = position > consensus.consensusPosition ? 
+            position - consensus.consensusPosition : 
+            consensus.consensusPosition - position;
             
-    //     return distance <= consensus.winningThreshold;
-    // }
+        return distance <= consensus.winningThreshold;
+    }
 
-    // /**
-    //  * @dev Returns the total number of markets
-    //  */
-    // function getMarketCount() public view returns (uint256) {
-    //     return _marketIdCounter;
-    // }
+    /**
+     * @dev Returns the total number of markets
+     */
+    function getMarketCount() public view returns (uint256) {
+        return _marketIdCounter;
+    }
 
-    // /**
-    //  * @dev Returns a a market by its ID
-    //  * @param marketId The ID of the market to check
-    //  */
-    // function getMarket(uint256 marketId) public view returns (Market memory) {
-    //     return markets[marketId];
-    // }
+    /**
+     * @dev Returns a a market by its ID
+     * @param marketId The ID of the market to check
+     */
+    function getMarket(uint256 marketId) public view returns (Market memory) {
+        return markets[marketId];
+    }
 }
