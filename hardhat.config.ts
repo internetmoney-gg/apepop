@@ -55,7 +55,17 @@ module.exports = {
     //   chainId: 33139,
     //   accounts: [process.env.APECHAIN_PRIVATE_KEY],
     // },
-
+ 
+    // base: {
+    //   url: "https://mainnet.base.org",
+    //   chainId: 8453,
+    //   accounts: [process.env.BASE_PRIVATE_KEY],
+    // },
+    // basesepolia: {
+    //   url: "https://sepolia.base.org",
+    //   chainId: 84532,
+    //   accounts: [process.env.BASE_PRIVATE_KEY],
+    // },
   },
   etherscan: {
     apiKey: process.env.ETHERSCAN_API_KEY,
