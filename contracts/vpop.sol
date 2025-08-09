@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
@@ -254,6 +255,129 @@ contract VPOP is Ownable {
         );
         
         return marketId;
+    }
+
+    /**
+     * @dev Submit a commitment for a market using EIP-2612 permit
+     * @param marketId The ID of the market to commit to
+     * @param commitmentHash The hash of the commitment (position, nonce, wager)
+     * @param wager The wager of the commitment
+     * @param proof The Merkle proof for whitelist verification
+     * @param deadline The permit deadline
+     * @param v The permit signature v component
+     * @param r The permit signature r component
+     * @param s The permit signature s component
+     */
+    function commitWithPermit(
+        uint256 marketId,
+        bytes32 commitmentHash,
+        uint128 wager,
+        bytes32[] calldata proof,
+        uint256 deadline,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) external {
+        // Validate market exists and is active
+        require(marketId <= _marketIdCounter && marketId > 0, "Market does not exist");
+        
+        Market storage market = markets[marketId];
+        
+        // Validate commitment phase is still open
+        require(
+            block.timestamp <= market.createdAt + market.commitDuration,
+            "Commitment phase has ended"
+        );
+
+        // Validate wager is greater than minimum wager
+        require(wager >= market.minWager, "Wager below minimum wager");
+        
+        if (whitelistRoots[marketId] != bytes32(0)) {   
+            // whitelisted market      
+            require(whitelistCommits[marketId][msg.sender] == false, "Address already used in this market");
+            bool verified = MerkleProof.verify(proof, whitelistRoots[marketId], keccak256(abi.encodePacked(msg.sender)));
+            require(verified, "Address not whitelisted");
+            whitelistCommits[marketId][msg.sender] = true;
+            wager = 100000;
+        } else {
+            // Normal market - handle ERC20 tokens with permit
+            require(market.token != address(0), "Permit only supports ERC20 tokens");
+            
+            IERC20 token = IERC20(market.token);
+            IERC20Permit permitToken = IERC20Permit(market.token);
+            
+            // Use permit to approve the contract to spend tokens
+            // This uses proper interface casting for better type safety
+            permitToken.permit(
+                msg.sender,
+                address(this),
+                uint256(wager),
+                deadline,
+                v,
+                r,
+                s
+            );
+            
+            // Check balance before transfer to handle fee-on-transfer tokens
+            uint256 balanceBefore = token.balanceOf(address(this));
+            
+            // Transfer tokens from user to contract
+            token.safeTransferFrom(msg.sender, address(this), uint256(wager));
+            
+            // Check balance after transfer to determine actual received amount
+            uint256 balanceAfter = token.balanceOf(address(this));
+            uint256 actualReceived = balanceAfter - balanceBefore;
+            
+            // Calculate fees based on actual received amount
+            uint256 platformFee = Math.mulDiv(actualReceived, platformFeeRate, 10000);
+            uint256 creatorFee = Math.mulDiv(actualReceived, creatorFeeRate, 10000);
+            uint256 apeFee = Math.mulDiv(actualReceived, apeFeeRate, 10000);
+            
+            // Add remaining amount to the pot after fees
+            uint256 winnings = actualReceived - platformFee - creatorFee - apeFee;
+            marketConsensus[marketId].totalWinnings += winnings;
+
+            // Transfer fees to platform and creator from contract using SafeERC20
+            token.safeTransfer(owner(), platformFee);
+            token.safeTransfer(market.creator, creatorFee);
+            token.safeTransfer(apeOwner, apeFee);
+        }
+        
+        marketConsensus[marketId].totalWagers += uint256(wager);
+
+        // Calculate weight using linear decay: weight = wager * (1 - decayFactor * elapsed / commitDuration)
+        // decay is scaled by 1e4 (basis points) so the result keeps precision
+        uint256 elapsed = block.timestamp - market.createdAt;
+        uint256 decay = Math.mulDiv(market.decayFactor, elapsed, market.commitDuration); // 0-10000
+        uint128 weight = uint128(wager * (10000 - decay) / 10000);
+        if (weight == 0) weight = 1;
+        
+        // Increment total commitments counter
+        marketConsensus[marketId].totalCommitments++;
+        // Get the next commitment ID
+        uint256 commitmentId = marketConsensus[marketId].totalCommitments;
+        
+        // Store the commitment
+        commitments[marketId][commitmentId] = Commitment({
+            wager: wager,
+            weight: weight,
+            timestamp: uint64(block.timestamp),
+            position: 0, // Will be set during reveal
+            nonce: 0,    // Will be set during reveal
+            commitmentHash: commitmentHash,
+            revealed: false,
+            claimed: false,
+            owner: msg.sender
+        });
+
+        emit CommitmentCreated(
+            marketId,
+            msg.sender,
+            commitmentId,
+            commitmentHash,
+            uint256(wager),
+            uint256(weight)
+        );
     }
 
     /**

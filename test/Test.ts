@@ -9,7 +9,7 @@ import { expect } from "chai";
 import "@nomicfoundation/hardhat-chai-matchers";
 import hre from "hardhat";
 import { ethers } from "hardhat";
-import { TestToken, TestToken__factory } from "../typechain-types";
+import { TestToken, TestToken__factory, TestTokenPermit, TestTokenPermit__factory } from "../typechain-types";
 
 // Helper function to create commitment hash
 function createCommitmentHash(position: bigint, wager: bigint, nonce: bigint): string {
@@ -151,6 +151,55 @@ const randomNonce64 = (): bigint => {
   // 8 random bytes -> 64-bit unsigned integer
   return ethers.toBigInt(ethers.hexlify(ethers.randomBytes(8)));
 };
+
+// Helper function to generate permit signature
+async function generatePermitSignature(
+  token: TestTokenPermit,
+  owner: any,
+  spender: string,
+  value: bigint,
+  deadline: number
+) {
+  const nonce = await token.nonces(owner.address);
+  const name = await token.name();
+  const version = "1";
+  const chainId = await owner.provider.getNetwork().then((n: any) => n.chainId);
+  
+  const domain = {
+    name,
+    version,
+    chainId,
+    verifyingContract: await token.getAddress()
+  };
+
+  const types = {
+    Permit: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" }
+    ]
+  };
+
+  const values = {
+    owner: owner.address,
+    spender,
+    value,
+    nonce,
+    deadline
+  };
+
+  const signature = await owner.signTypedData(domain, types, values);
+  const sig = ethers.Signature.from(signature);
+  
+  return {
+    v: sig.v,
+    r: sig.r,
+    s: sig.s,
+    deadline
+  };
+}
 
 describe("VPOP", function () {
   let vpop: any;
@@ -1903,6 +1952,348 @@ describe("VPOP", function () {
       
       // Verify market count increased by 1
       expect(finalMarketCount).to.equal(initialMarketCount + 1n);
+    });
+  });
+
+  describe("CommitWithPermit", function () {
+    let testTokenPermit: TestTokenPermit;
+    
+    beforeEach(async function () {
+      // Deploy test token with permit functionality
+      const TestTokenPermitFactory = await ethers.getContractFactory("TestTokenPermit");
+      testTokenPermit = await TestTokenPermitFactory.deploy();
+      await testTokenPermit.waitForDeployment();
+    });
+
+    it("Should successfully commit with permit for ERC20 token", async function () {
+      // Create market with permit-enabled token
+      const marketId = await createMarket({
+        vpopContract: vpop,
+        signer: owner,
+        token: await testTokenPermit.getAddress(),
+        lowerBound: 1000n,
+        upperBound: 10000n,
+        minWager: ethers.parseEther("0.1"),
+        decayFactor: 20,
+        ipfsHash: "QmTest123"
+      });
+
+      // Create commitment parameters
+      const position = 5000n;
+      const nonce = randomNonce64();
+      const wager = ethers.parseEther("1.0");
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      // Mint tokens to user
+      await testTokenPermit.mint(otherAccount.address, wager);
+
+      // Generate permit signature using blockchain time
+      const currentTime = await time.latest();
+      const deadline = currentTime + 3600; // 1 hour from now
+      const permitSig = await generatePermitSignature(
+        testTokenPermit,
+        otherAccount,
+        await vpop.getAddress(),
+        wager,
+        deadline
+      );
+
+      // Get initial balances
+      const initialOwnerBalance = await testTokenPermit.balanceOf(owner.address);
+      const initialCreatorBalance = await testTokenPermit.balanceOf(owner.address);
+      const initialApeOwnerBalance = await testTokenPermit.balanceOf("0x5AC40A1175715F1c27e3FEAa8C79664040717679");
+      const initialUserBalance = await testTokenPermit.balanceOf(otherAccount.address);
+
+      // Execute commitWithPermit
+      const tx = await vpop.connect(otherAccount).commitWithPermit(
+        marketId,
+        commitmentHash,
+        wager,
+        [], // empty proof for non-whitelisted market
+        permitSig.deadline,
+        permitSig.v,
+        permitSig.r,
+        permitSig.s
+      );
+      const receipt = await tx.wait();
+
+      // Verify commitment was created
+      const marketConsensus = await vpop.marketConsensus(marketId);
+      const commitment = await vpop.commitments(marketId, marketConsensus.totalCommitments);
+      
+      expect(commitment.commitmentHash).to.equal(commitmentHash);
+      expect(commitment.wager).to.equal(wager);
+      expect(commitment.owner).to.equal(otherAccount.address);
+      expect(commitment.revealed).to.be.false;
+
+      // Verify fees were distributed correctly
+      const finalOwnerBalance = await testTokenPermit.balanceOf(owner.address);
+      const finalApeOwnerBalance = await testTokenPermit.balanceOf("0x5AC40A1175715F1c27e3FEAa8C79664040717679");
+      const finalUserBalance = await testTokenPermit.balanceOf(otherAccount.address);
+
+      // Get current fee rates from contract (they were updated in earlier tests)
+      const platformFeeRate = await vpop.platformFeeRate();
+      const creatorFeeRate = await vpop.creatorFeeRate();
+      const apeFeeRate = await vpop.apeFeeRate();
+      
+      // Calculate expected fees using actual contract rates
+      const platformFee = (wager * platformFeeRate) / 10000n;
+      const creatorFee = (wager * creatorFeeRate) / 10000n; 
+      const apeFee = (wager * apeFeeRate) / 10000n;
+
+      expect(finalOwnerBalance - initialOwnerBalance).to.equal(platformFee + creatorFee); // owner is also creator
+      expect(finalApeOwnerBalance - initialApeOwnerBalance).to.equal(apeFee);
+      expect(finalUserBalance).to.equal(initialUserBalance - wager);
+
+      // Verify total wagers and winnings
+      expect(marketConsensus.totalWagers).to.equal(wager);
+      const expectedWinnings = wager - platformFee - creatorFee - apeFee;
+      expect(marketConsensus.totalWinnings).to.equal(expectedWinnings);
+    });
+
+    it("Should reject commitWithPermit for ETH markets", async function () {
+      // Create ETH market (token = ZeroAddress)
+      const marketId = await createMarket({
+        vpopContract: vpop,
+        signer: owner,
+        token: ethers.ZeroAddress, // ETH market
+        lowerBound: 1000n,
+        upperBound: 10000n,
+        minWager: ethers.parseEther("0.1"),
+        decayFactor: 20,
+        ipfsHash: "QmTest123"
+      });
+
+      const position = 5000n;
+      const nonce = randomNonce64();
+      const wager = ethers.parseEther("1.0");
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+      const currentTime = await time.latest();
+      const deadline = currentTime + 3600;
+
+      // Should fail because commitWithPermit only supports ERC20 tokens
+      await expect(
+        vpop.connect(otherAccount).commitWithPermit(
+          marketId,
+          commitmentHash,
+          wager,
+          [],
+          deadline,
+          27,
+          ethers.ZeroHash,
+          ethers.ZeroHash
+        )
+      ).to.be.revertedWith("Permit only supports ERC20 tokens");
+    });
+
+    it("Should fail with invalid permit signature", async function () {
+      // Create market with permit-enabled token
+      const marketId = await createMarket({
+        vpopContract: vpop,
+        signer: owner,
+        token: await testTokenPermit.getAddress(),
+        lowerBound: 1000n,
+        upperBound: 10000n,
+        minWager: ethers.parseEther("0.1"),
+        decayFactor: 20,
+        ipfsHash: "QmTest123"
+      });
+
+      const position = 5000n;
+      const nonce = randomNonce64();
+      const wager = ethers.parseEther("1.0");
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      await testTokenPermit.mint(otherAccount.address, wager);
+
+      const currentTime = await time.latest();
+      const deadline = currentTime + 3600;
+
+      // Use invalid signature
+      await expect(
+        vpop.connect(otherAccount).commitWithPermit(
+          marketId,
+          commitmentHash,
+          wager,
+          [],
+          deadline,
+          27,
+          ethers.ZeroHash, // Invalid r
+          ethers.ZeroHash  // Invalid s
+        )
+      ).to.be.reverted; // Will revert due to invalid signature
+    });
+
+    it("Should fail with expired permit", async function () {
+      // Create market with permit-enabled token
+      const marketId = await createMarket({
+        vpopContract: vpop,
+        signer: owner,
+        token: await testTokenPermit.getAddress(),
+        lowerBound: 1000n,
+        upperBound: 10000n,
+        minWager: ethers.parseEther("0.1"),
+        decayFactor: 20,
+        ipfsHash: "QmTest123"
+      });
+
+      const position = 5000n;
+      const nonce = randomNonce64();
+      const wager = ethers.parseEther("1.0");
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      await testTokenPermit.mint(otherAccount.address, wager);
+
+      // Use expired deadline (1 second ago)
+      const currentTime = await time.latest();
+      const expiredDeadline = currentTime - 1;
+      const permitSig = await generatePermitSignature(
+        testTokenPermit,
+        otherAccount,
+        await vpop.getAddress(),
+        wager,
+        expiredDeadline
+      );
+
+      await expect(
+        vpop.connect(otherAccount).commitWithPermit(
+          marketId,
+          commitmentHash,
+          wager,
+          [],
+          permitSig.deadline,
+          permitSig.v,
+          permitSig.r,
+          permitSig.s
+        )
+      ).to.be.reverted; // Will revert due to expired deadline
+    });
+
+    it("Should have identical validation logic to regular commit", async function () {
+      // Create market
+      const marketId = await createMarket({
+        vpopContract: vpop,
+        signer: owner,
+        token: await testTokenPermit.getAddress(),
+        lowerBound: 1000n,
+        upperBound: 10000n,
+        minWager: ethers.parseEther("0.1"),
+        decayFactor: 20,
+        ipfsHash: "QmTest123"
+      });
+
+      const position = 5000n;
+      const nonce = randomNonce64();
+      const wager = ethers.parseEther("1.0");
+      const currentTime = await time.latest();
+      const deadline = currentTime + 3600;
+
+      // Test: market validation
+      await expect(
+        vpop.connect(otherAccount).commitWithPermit(
+          999n, // non-existent market
+          createCommitmentHash(position, wager, nonce),
+          wager,
+          [],
+          deadline,
+          27,
+          ethers.ZeroHash,
+          ethers.ZeroHash
+        )
+      ).to.be.revertedWith("Market does not exist");
+
+      // Test: minimum wager validation
+      const lowWager = ethers.parseEther("0.05");
+      await expect(
+        vpop.connect(otherAccount).commitWithPermit(
+          marketId,
+          createCommitmentHash(position, lowWager, nonce),
+          lowWager,
+          [],
+          deadline,
+          27,
+          ethers.ZeroHash,
+          ethers.ZeroHash
+        )
+      ).to.be.revertedWith("Wager below minimum wager");
+
+      // Test: commitment phase ended
+      await time.increase(3601); // Move past commit phase
+      await expect(
+        vpop.connect(otherAccount).commitWithPermit(
+          marketId,
+          createCommitmentHash(position, wager, nonce),
+          wager,
+          [],
+          deadline,
+          27,
+          ethers.ZeroHash,
+          ethers.ZeroHash
+        )
+      ).to.be.revertedWith("Commitment phase has ended");
+    });
+
+    it("Should support full commit-reveal-resolve-claim flow with permit", async function () {
+      // Create market
+      const marketId = await createMarket({
+        vpopContract: vpop,
+        signer: owner,
+        token: await testTokenPermit.getAddress(),
+        lowerBound: 1000n,
+        upperBound: 10000n,
+        minWager: ethers.parseEther("0.1"),
+        decayFactor: 0, // No decay for simplicity
+        commitDuration: 3600,
+        revealDuration: 3600,
+        winningPercentile: 10000, // 100% - all win
+        ipfsHash: "QmTest123"
+      });
+
+      const position = 5000n;
+      const nonce = randomNonce64();
+      const wager = ethers.parseEther("1.0");
+      const commitmentHash = createCommitmentHash(position, wager, nonce);
+
+      // Mint tokens and commit with permit
+      await testTokenPermit.mint(otherAccount.address, wager);
+      
+      const currentTime = await time.latest();
+      const deadline = currentTime + 3600;
+      const permitSig = await generatePermitSignature(
+        testTokenPermit,
+        otherAccount,
+        await vpop.getAddress(),
+        wager,
+        deadline
+      );
+
+      await vpop.connect(otherAccount).commitWithPermit(
+        marketId,
+        commitmentHash,
+        wager,
+        [],
+        permitSig.deadline,
+        permitSig.v,
+        permitSig.r,
+        permitSig.s
+      );
+
+      // Move to reveal phase and reveal
+      await time.increase(3601);
+      await vpop.connect(otherAccount).reveal(marketId, 1, commitmentHash, position, nonce);
+
+      // Move to resolution phase and resolve
+      await time.increase(3601);
+      const threshold = await calculateWinningThreshold(vpop, marketId);
+      await vpop.resolve(marketId, threshold);
+
+      // Claim winnings
+      const balanceBefore = await testTokenPermit.balanceOf(otherAccount.address);
+      await vpop.connect(otherAccount).claim(marketId, 1);
+      const balanceAfter = await testTokenPermit.balanceOf(otherAccount.address);
+
+      // Verify user received winnings
+      expect(balanceAfter).to.be.gt(balanceBefore);
     });
   });
 });
